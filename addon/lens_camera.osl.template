@@ -1,6 +1,7 @@
 #define MAX_SURFACES 36
 #define N_EXTRA 8
-#define MAX_EXTRA (MAX_SURFACES * N_EXTRA)
+// OSL array sizes must be integer literals: MAX_SURFACES * N_EXTRA
+#define MAX_EXTRA 288
 
 #define SURFACE_SPHERICAL     0
 #define SURFACE_FLAT          1
