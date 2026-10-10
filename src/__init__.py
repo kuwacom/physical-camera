@@ -67,7 +67,23 @@ def _build_camera_shader(cam):
     text.clear()
     text.write(osl_source)
     cam.custom_shader = text
+    _compile_camera_shader(cam)
     sync_to_cycles(cam)
+
+
+def _compile_camera_shader(cam):
+    """Compile the camera shader to bytecode even when the scene engine is not Cycles."""
+    # custom_shader 代入時の自動コンパイルはシーンのエンジンが Cycles のときしか走らず、
+    # EEVEE 等で有効化やレンズ変更をすると bytecode が空/古いまま残り Cycles で真っ黒になるため
+    scene = bpy.context.scene
+    if scene is not None and scene.render.engine == "CYCLES":
+        return
+    try:
+        from cycles import engine, osl
+    except ImportError:
+        return
+    if engine.with_osl():
+        osl.update_custom_camera_shader(cam, lambda _type, message: print(f"Physical Camera: {message}"))
 
 
 def sync_to_cycles(cam):
