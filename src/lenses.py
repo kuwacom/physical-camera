@@ -99,6 +99,19 @@ def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
     return efl / entrance_pupil
 
 
+def min_fstop(lens: dict) -> float:
+    """Smallest f-number the lens data can actually reach (UI lower bound)."""
+    # データ上の絞りが表記より小さいレンズは表記の f 値まで開けないため、実際に開ける値を下限にする
+    return max(lens["max_fstop"], lens["open_fstop"])
+
+
+def aperture_scale(lens: dict, fstop: float) -> float:
+    """Stop diameter multiplier that makes the effective f-number equal fstop."""
+    # 絞り径は入射瞳径と比例するため、データ上の開放 f 値 (近軸) を基準にすれば UI の f 値と実効 f 値が一致する
+    # max_fstop 基準だと絞り径と表記 f 値がずれたレンズで明るさ・ボケ量が狂う
+    return min(lens["open_fstop"] / fstop, 1.0)
+
+
 def _validate_surfaces(surfaces: list[dict], surface_types: list[str], filename: str) -> None:
     for i, (s, st) in enumerate(zip(surfaces, surface_types, strict=True)):
         where = f"{filename}: surface {i}"
@@ -201,5 +214,6 @@ def load_lenses(lens_dir: Path) -> list[dict]:
             lenses.append(load_lens(toml_path))
         # 検証で拾いきれない想定外の構造 (KeyError/TypeError) でもアドオン全体を落とさないため広めに捕捉する
         except (OSError, tomllib.TOMLDecodeError, ValueError, KeyError, TypeError) as e:
-            print(f"Physical Camera: skipped lens {toml_path.name}: {e}")
+            detail = str(e).removeprefix(f"{toml_path.name}: ")
+            print(f"Physical Camera: skipped lens {toml_path.name}: {detail}")
     return lenses

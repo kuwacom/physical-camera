@@ -12,6 +12,7 @@ from bpy.props import (
 )
 
 from . import codegen, diagram, scene_lights
+from .lenses import aperture_scale, min_fstop
 
 _TEXT_BLOCK_PREFIX = "Physical Lens - "
 
@@ -116,16 +117,9 @@ def sync_to_cycles(cam):
     custom["debug_mode"] = debug_map[props.debug_mode]
 
     if lens is not None:
-        # 絞り径は入射瞳径と比例するため、データ上の開放 f 値 (近軸) を基準にすれば UI の f 値と実効 f 値が一致する
-        # max_fstop 基準だと絞り径と表記 f 値がずれたレンズで明るさ・ボケ量が狂う
-        custom["aperture_scale"] = min(lens["open_fstop"] / props.fstop, 1.0)
+        custom["aperture_scale"] = aperture_scale(lens, props.fstop)
     else:
         custom["aperture_scale"] = 1.0
-
-
-def _min_fstop(lens) -> float:
-    # データ上の絞りが表記より小さいレンズは表記の f 値まで開けないため、実際に開ける値を下限にする
-    return max(lens["max_fstop"], lens["open_fstop"])
 
 
 def _sync_focal_length(cam, lens):
@@ -136,8 +130,8 @@ def _sync_focal_length(cam, lens):
 def _on_lens_change(self, context):
     lens = _get_lens(self)
     if lens is not None:
-        if self.fstop < _min_fstop(lens):
-            self.fstop = _min_fstop(lens)
+        if self.fstop < min_fstop(lens):
+            self.fstop = min_fstop(lens)
     # 選択中オブジェクトではなくプロパティの持ち主に反映しないと、スクリプト操作や別オブジェクト選択中の変更が別カメラに入る
     cam = self.id_data
     _sync_focal_length(cam, lens)
@@ -305,7 +299,7 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
         lens = _get_lens(props)
 
         if lens is not None:
-            layout.prop(props, "fstop", text=f"f-stop (min f/{_min_fstop(lens):.1f})")
+            layout.prop(props, "fstop", text=f"f-stop (min f/{min_fstop(lens):.1f})")
         else:
             layout.prop(props, "fstop")
 

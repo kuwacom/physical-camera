@@ -13,6 +13,7 @@ dev = [
     "ruff>=0.14",
     # scripts/build_diagrams.py がレンズ断面図の PNG を生成するのに使う
     "pillow",
+    "pytest",
 ]
 
 # Blender のアドオンとして直接読み込むため、Python パッケージとしてはビルドしない
