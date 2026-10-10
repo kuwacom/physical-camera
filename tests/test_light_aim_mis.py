@@ -125,7 +125,7 @@ def test_ghost_without_targets_is_uniform_only():
     assert_matches(values, expected)
 
 
-# --- 回折: 一様側は n 本の光条それぞれの軸方向・直交方向 Cauchy の積の平均 (平面全体が台)。PSF は sinc² の積の平均
+# --- 回折: 一様側は n 本の光条それぞれの軸方向・直交方向 Cauchy の積の平均 (平面全体が台)。PSF は軸方向 sinc² と直交方向ガウスの積の平均
 
 BLADES = 6
 BLADE_ROT = 0.3
@@ -153,7 +153,7 @@ def diffraction_psf_pdf(x, y):
     for c, s in spike_axes():
         u = (x * c + y * s) / THETA0
         v = (-x * s + y * c) / THETA0_PERP
-        psf += sinc2(u) * sinc2(v)
+        psf += sinc2(u) * math.exp(-math.pi * v * v)
         pdf += 1.0 / ((1.0 + math.pi**2 * u * u) * (1.0 + math.pi**2 * v * v))
     norm = 1.0 / (BLADES * THETA0 * THETA0_PERP)
     return psf * norm, pdf * norm

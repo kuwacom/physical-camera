@@ -1437,7 +1437,7 @@ float spike_edge_angle(float blade_rot_rad, int edge, int n)
 // Aperture diffraction starburst via two-component mixture model.
 // Core rays (most energy) pass through unperturbed; spike rays are deflected
 // along edge-perpendicular directions with Cauchy-sampled sinc² weighting.
-// 光条の PSF は光条 k ごとの「軸方向 sinc²(u/θ0) × 直交方向 sinc²(v/θ0⊥)」を光条数で平均した平面上の密度 (積分 1)
+// 光条の PSF は光条 k ごとの「軸方向 sinc²(u/θ0) × 直交方向 exp(-π(v/θ0⊥)²)」を光条数で平均した平面上の密度 (積分 1)
 // ライト照準と MIS で混ぜるには両方の標本化が同じ 2 次元の測度を持つ必要があるため、直交方向も Cauchy で標本化する
 void sample_diffraction_spike(
     int n, float blade_rot_rad, float theta0, float theta0_perp,
@@ -1476,7 +1476,9 @@ void diffraction_psf_pdf(
         float s = sin(a);
         float u = (px * c + py * s) / theta0;
         float v = (-px * s + py * c) / theta0_perp;
-        psf += sinc2(u) * sinc2(v);
+        // 直交方向まで sinc² にすると矩形開口の PSF になり、辺に平行な偽の光条 (n=6 では本物より明るい) が出る
+        // 多角形の辺の方向には光条が無いため、直交方向は積分 1・同じピーク高さで裾の無いガウスにする
+        psf += sinc2(u) * exp(-M_PI * v * v);
         pdf += 1.0 / ((1.0 + M_PI * M_PI * u * u) * (1.0 + M_PI * M_PI * v * v));
     }
     float norm = 1.0 / (float(n) * theta0 * theta0_perp);
