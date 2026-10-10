@@ -1667,23 +1667,33 @@ int diffraction_light_targets(
     return total > 0.0 ? 1 : 0;
 }
 
+// Cycles の osl.py は help だけを UI の説明に使い description は捨てるため help で書く
+// min / max は Physical Camera のプロパティ側の範囲に合わせる (Parameters パネルで直接編集したときの範囲外入力を防ぐ)
 shader lens_camera(
     float aperture_scale = 1.0
-        [[ string description = "Scale factor for the aperture stop opening. 1.0 = wide open." ]],
+        [[ string help = "Scale factor for the aperture stop opening. 1.0 = wide open.",
+           float min = 0.0, float max = 1.0 ]],
     int aperture_blades = 0
-        [[ string description = "Number of aperture blades. 0 = circular." ]],
+        [[ string help = "Number of aperture blades. 0 = circular.",
+           int min = 0, int max = 20 ]],
     float blade_rotation = 0.0
-        [[ string description = "Aperture blade rotation in degrees." ]],
+        [[ string help = "Aperture blade rotation in degrees.",
+           float min = 0.0, float max = 360.0 ]],
     int chromatic_aberration = 1
-        [[ string description = "Enable chromatic aberration (spectral dispersion)." ]],
+        [[ string help = "Enable chromatic aberration (spectral dispersion).",
+           int min = 0, int max = 1 ]],
     int lens_ghosts = 0
-        [[ string description = "Enable ghost/flare simulation (double-bounce reflections)." ]],
+        [[ string help = "Enable ghost/flare simulation (double-bounce reflections).",
+           int min = 0, int max = 1 ]],
     float ghost_intensity = 1.0
-        [[ string description = "Brightness multiplier for ghost images." ]],
+        [[ string help = "Brightness multiplier for ghost images.",
+           float min = 0.0, float max = 100.0 ]],
     int diffraction = 0
-        [[ string description = "Enable aperture diffraction (starburst spikes)." ]],
+        [[ string help = "Enable aperture diffraction (starburst spikes).",
+           int min = 0, int max = 1 ]],
     float debug_mode = 0.0
-        [[ string description = "0=normal, 1=pinhole, 2=diagnostic, 3=exit dir, 4=ghosts only, 5=ghost aim" ]],
+        [[ string help = "0=normal, 1=pinhole, 2=diagnostic, 3=exit dir, 4=ghosts only, 5=ghost aim",
+           float min = 0.0, float max = 5.0 ]],
     // {{SCENE_LIGHT_PARAMS}}
     output point position = 0,
     output vector direction = 0,

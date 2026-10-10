@@ -132,3 +132,4 @@ The shader entry point must output `position`, `direction`, and `throughput` (se
 
 - `camera_shader_raster_position()` — normalized sensor position (0–1); `camera_shader_random_sample()` — two uniform random values in x/y
 - `getattribute("cam:sensor_size", ...)` — physical sensor dimensions in mm; `getattribute("cam:focal_distance", ...)` — focus distance in meters
+- Parameter metadata: Cycles' `osl.py` copies only `help` (as the description), `min` / `max`, `slidermin` / `slidermax`, `sensitivity` and `digits` into `cam.cycles_custom`'s ID property UI (the Parameters panel); `description` is dropped. Use `[[ string help = ..., min, max ]]` with the ranges of the matching `PhysicalCameraProperties`; light parameters (`scene_lights.generate_light_params()`) say they are set automatically. Do not add `widget = "boolean"` — it turns the ID property into a bool and resets the stored values

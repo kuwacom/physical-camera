@@ -1,7 +1,7 @@
 import re
 
 import pytest
-from conftest import LENS_DIR, TEMPLATE_PATH, codegen, lenses
+from conftest import LENS_DIR, TEMPLATE_PATH, codegen, lenses, scene_lights
 
 
 @pytest.fixture(scope="module")
@@ -88,3 +88,20 @@ def test_entrance_pupil_magnification_values(bundled_lenses):
     assert mag("nikkor_fisheye_16mm_f2_8", "y") == pytest.approx(0.405, abs=0.005)
     assert mag("neil_front_anamorphic_2x", "y") == pytest.approx(1.180, abs=0.005)
     assert mag("neil_front_anamorphic_2x", "x") == pytest.approx(0.596, abs=0.005)
+
+
+def test_shader_parameters_use_help_metadata(template, bundled_lenses):
+    # Cycles の osl.py は help だけを Parameters パネルの説明に反映し、description は捨てる
+    osl = codegen.build_camera_osl(template, bundled_lenses[0])
+    start = osl.index("shader lens_camera(")
+    header = osl[start : osl.index("output point position", start)]
+    assert "string description" not in header
+    params = re.findall(r"^\s+(?:int|float|vector) (\w+) = [^\n]*\n\s+\[\[ string help = \"([^\"]+)\"", header, re.M)
+    names = [name for name, _ in params]
+    assert len(names) == 8 + 1 + 2 * scene_lights.MAX_LIGHTS
+    assert "aperture_scale" in names and "scene_light_count" in names
+    # ライト用は自動設定なので手で編集しないよう UI に出す
+    for name, text in params:
+        if name.startswith("scene_light"):
+            assert "do not edit" in text, name
+    assert "int min = 0, int max = 20" in header

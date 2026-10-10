@@ -188,16 +188,18 @@ def generate_scene_light_defines():
 
 def generate_light_params():
     """Generate the shader parameter declarations that carry scene lights."""
+    # Cycles は help だけを Parameters パネルの説明に使う。値はハンドラーが上書きするため、手で編集しないよう明記する
+    auto = "Set automatically by Physical Camera; do not edit."
     lines = [
         f"int {LIGHT_COUNT_PARAM} = 0",
-        '    [[ string description = "Set automatically by Physical Camera from the scene lights." ]],',
+        f'    [[ string help = "Number of scene lights. {auto}", int min = 0, int max = {MAX_LIGHTS} ]],',
     ]
     for i in range(MAX_LIGHTS):
         geom, info = light_param_names(i)
         lines.append(f"vector {geom} = 0")
-        lines.append('    [[ string description = "World position (m), or toward-source direction for sun." ]],')
+        lines.append(f'    [[ string help = "World position (m), or toward-source direction for sun. {auto}" ]],')
         lines.append(f"vector {info} = 0")
-        lines.append('    [[ string description = "Type (0=positional, 1=sun), intensity, radius (mm)." ]],')
+        lines.append(f'    [[ string help = "Type (0=positional, 1=sun), intensity, radius (mm). {auto}" ]],')
     return "\n".join(lines)
 
 
