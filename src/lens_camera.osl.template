@@ -1458,6 +1458,13 @@ void write_camera_ray(
     }
 }
 
+// デバッグ表示はレンズを通さず、色だけを見せるためにセンサー位置からのピンホール光線を全モードで共有する
+void debug_pinhole_ray(float sensor_x, float sensor_y, output point position, output vector direction)
+{
+    position = point(0, 0, 0);
+    direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
+}
+
 // CDF scan to select light proportional to intensity
 // 見つからないときの扱いがゴーストと回折で異なるため、-1 を返して呼び出し側に任せる
 int select_light(int num_lights, float weights[MAX_LIGHTS], float total, float hash)
@@ -1707,8 +1714,7 @@ shader lens_camera(
     // Debug mode 1: pinhole camera to verify the framework
     // +Z is the view direction in Blender's OSL camera convention
     if (debug_view == 1) {
-        position = point(0, 0, 0);
-        direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
+        debug_pinhole_ray(sensor_x, sensor_y, position, direction);
         throughput = 1.0;
         return;
     }
@@ -1962,8 +1968,7 @@ shader lens_camera(
     // Debug mode 5: ghost aim diagnostic
     // R = num_lights / MAX_LIGHTS, G = light aiming valid, B = trace_ghost
     if (debug_view == 5) {
-        position = point(0, 0, 0);
-        direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
+        debug_pinhole_ray(sensor_x, sensor_y, position, direction);
 
         if (!trace_ghost) {
             throughput = 0.0;
@@ -2119,8 +2124,7 @@ shader lens_camera(
     // Green = aperture clip, Blue = TIR, Red = intersection miss.
     // Brightness = how far the ray got.
     if (debug_view == 2) {
-        position = point(0, 0, 0);
-        direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
+        debug_pinhole_ray(sensor_x, sensor_y, position, direction);
         if (ok) {
             throughput = color(1, 1, 1);
         } else {
@@ -2137,8 +2141,7 @@ shader lens_camera(
     if (debug_view == 3) {
         if (ok) {
             vector d_norm = normalize(exit_dir);
-            position = point(0, 0, 0);
-            direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
+            debug_pinhole_ray(sensor_x, sensor_y, position, direction);
             throughput = color(d_norm[0] * 0.5 + 0.5,
                                d_norm[1] * 0.5 + 0.5,
                                d_norm[2] * 0.5 + 0.5);
