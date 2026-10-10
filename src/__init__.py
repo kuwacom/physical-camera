@@ -56,7 +56,12 @@ def _get_or_create_text_block(cam):
         and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
         and not _is_text_used_by_other_camera(cam.custom_shader, cam)
     ):
-        return cam.custom_shader
+        text = cam.custom_shader
+        name = f"{_TEXT_BLOCK_PREFIX}{cam.name}"
+        if text.name != name:
+            # カメラ名変更後にテキスト名が古いままだとテキストエディターで対応が分からなくなるため揃える
+            text.name = name
+        return text
 
     name = f"{_TEXT_BLOCK_PREFIX}{cam.name}"
     text = bpy.data.texts.get(name)
