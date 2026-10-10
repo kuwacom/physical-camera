@@ -115,24 +115,20 @@ def _on_lens_change(self, context):
     if lens is not None:
         if self.fstop < lens["max_fstop"]:
             self.fstop = lens["max_fstop"]
-    cam = context.object.data if context.object else None
-    if cam:
-        _sync_focal_length(cam, lens)
-        _build_camera_shader(cam)
+    # 選択中オブジェクトではなくプロパティの持ち主に反映しないと、スクリプト操作や別オブジェクト選択中の変更が別カメラに入る
+    cam = self.id_data
+    _sync_focal_length(cam, lens)
+    _build_camera_shader(cam)
 
 
 def _on_property_change(self, context):
-    cam = context.object.data if context.object else None
-    if cam:
-        sync_to_cycles(cam)
+    sync_to_cycles(self.id_data)
 
 
 def _on_light_feature_toggle(self, context):
     global _cached_light_key
     _cached_light_key = None
-    cam = context.object.data if context.object else None
-    if cam:
-        sync_to_cycles(cam)
+    sync_to_cycles(self.id_data)
     if context.scene:
         _update_scene_lights(context.scene)
 
