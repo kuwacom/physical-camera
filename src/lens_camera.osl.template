@@ -724,18 +724,32 @@ int compute_light_aim_points(
     return aim_total > 0.0 ? 1 : 0;
 }
 
-int intersect_sphere(
+// 球面とシリンドリカル面は曲率を持つ軸だけが違うため、軸マスクを掛けた同じ二次方程式で交点を求める
+// SURFACE_CYLINDRICAL_X: curvature in X-Z plane (flat in Y)
+// SURFACE_CYLINDRICAL_Y: curvature in Y-Z plane (flat in X)
+// それ以外の型は球面として扱う (非球面の初期値にも使う)
+void curved_axis_mask(int surface_type, output float mask_x, output float mask_y)
+{
+    mask_x = (surface_type == SURFACE_CYLINDRICAL_Y) ? 0.0 : 1.0;
+    mask_y = (surface_type == SURFACE_CYLINDRICAL_X) ? 0.0 : 1.0;
+}
+
+int intersect_curved(
     point ray_origin,
     vector ray_dir,
     float sphere_center_z,
     float radius,
+    int surface_type,
     output point hit_point)
 {
-    float ox = ray_origin[0];
-    float oy = ray_origin[1];
+    // Cylindrical surface: circle in one axis + z, infinite in the other.
+    float mask_x, mask_y;
+    curved_axis_mask(surface_type, mask_x, mask_y);
+    float ox = ray_origin[0] * mask_x;
+    float oy = ray_origin[1] * mask_y;
     float oz = ray_origin[2] - sphere_center_z;
-    float dx = ray_dir[0];
-    float dy = ray_dir[1];
+    float dx = ray_dir[0] * mask_x;
+    float dy = ray_dir[1] * mask_y;
     float dz = ray_dir[2];
 
     float a = dx * dx + dy * dy + dz * dz;
@@ -753,63 +767,6 @@ int intersect_sphere(
     // Pick the intersection closest to the vertex (sphere_center_z - radius).
     // Do NOT fall back to the far-side intersection — if the vertex-side hit
     // is behind the ray, the ray has passed this surface and should be rejected.
-    float vertex_z = sphere_center_z - radius;
-    point p1 = ray_origin + t1 * ray_dir;
-    point p2 = ray_origin + t2 * ray_dir;
-
-    float dist1 = abs(p1[2] - vertex_z);
-    float dist2 = abs(p2[2] - vertex_z);
-
-    if (dist1 < dist2) {
-        if (t1 > 1e-6) {
-            hit_point = p1;
-            return 1;
-        }
-    } else {
-        if (t2 > 1e-6) {
-            hit_point = p2;
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-int intersect_cylindrical(
-    point ray_origin,
-    vector ray_dir,
-    float sphere_center_z,
-    float radius,
-    int surface_type,
-    output point hit_point)
-{
-    // Cylindrical surface: circle in one axis + z, infinite in the other.
-    // SURFACE_CYLINDRICAL_X: curvature in X-Z plane (flat in Y)
-    // SURFACE_CYLINDRICAL_Y: curvature in Y-Z plane (flat in X)
-    float oz = ray_origin[2] - sphere_center_z;
-    float dz = ray_dir[2];
-
-    float oh, dh;
-    if (surface_type == SURFACE_CYLINDRICAL_X) {
-        oh = ray_origin[0];
-        dh = ray_dir[0];
-    } else {
-        oh = ray_origin[1];
-        dh = ray_dir[1];
-    }
-
-    float a = dh * dh + dz * dz;
-    float b = 2.0 * (oh * dh + oz * dz);
-    float c = oh * oh + oz * oz - radius * radius;
-
-    float disc = b * b - 4.0 * a * c;
-    if (disc < 0.0)
-        return 0;
-
-    float sqrt_disc = sqrt(disc);
-    float t1 = (-b - sqrt_disc) / (2.0 * a);
-    float t2 = (-b + sqrt_disc) / (2.0 * a);
-
     float vertex_z = sphere_center_z - radius;
     point p1 = ray_origin + t1 * ray_dir;
     point p2 = ray_origin + t2 * ray_dir;
@@ -856,7 +813,7 @@ int intersect_aspheric(
     // Seed with spherical intersection
     point sphere_hit = point(0, 0, 0);
     float sphere_center_z = vertex_z + radius;
-    if (!intersect_sphere(ray_origin, ray_dir, sphere_center_z, radius, sphere_hit))
+    if (!intersect_curved(ray_origin, ray_dir, sphere_center_z, radius, SURFACE_SPHERICAL, sphere_hit))
         return 0;
 
     float c = 1.0 / radius;
@@ -942,13 +899,9 @@ int find_surface_intersection(
     if (surface_type == SURFACE_ASPHERIC) {
         if (!intersect_aspheric(ray_origin, ray_dir, vertex_z, radius, k, A4, A6, A8, A10, hit))
             return 0;
-    } else if (surface_type == SURFACE_CYLINDRICAL_X || surface_type == SURFACE_CYLINDRICAL_Y) {
-        float cyl_center_z = vertex_z + radius;
-        if (!intersect_cylindrical(ray_origin, ray_dir, cyl_center_z, radius, surface_type, hit))
-            return 0;
     } else {
         float sphere_center_z = vertex_z + radius;
-        if (!intersect_sphere(ray_origin, ray_dir, sphere_center_z, radius, hit))
+        if (!intersect_curved(ray_origin, ray_dir, sphere_center_z, radius, surface_type, hit))
             return 0;
     }
 
@@ -966,15 +919,11 @@ int find_surface_intersection(
         } else {
             N = vector(0, 0, 1);
         }
-    } else if (surface_type == SURFACE_CYLINDRICAL_X) {
-        float cyl_center_z = vertex_z + radius;
-        N = normalize(vector(hit[0], 0, hit[2] - cyl_center_z));
-    } else if (surface_type == SURFACE_CYLINDRICAL_Y) {
-        float cyl_center_z = vertex_z + radius;
-        N = normalize(vector(0, hit[1], hit[2] - cyl_center_z));
     } else {
         float sphere_center_z = vertex_z + radius;
-        N = normalize(hit - point(0, 0, sphere_center_z));
+        float mask_x, mask_y;
+        curved_axis_mask(surface_type, mask_x, mask_y);
+        N = normalize(vector(hit[0] * mask_x, hit[1] * mask_y, hit[2] - sphere_center_z));
     }
 
     hit_point = hit;
