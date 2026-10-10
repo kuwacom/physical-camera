@@ -360,8 +360,9 @@ float compute_sensor_distance(
         return bfd;
 
     float d_o = focus_mm - total_length + fpp;
-    if (d_o <= f)
-        return bfd;
+    // d_o <= f では実像ができず、無限遠の bfd を返すとピントが不連続に飛ぶため、
+    // 実用レンズの限界である等倍 (d_o = 2f) を下限にして最も近いピント位置に留める
+    d_o = max(d_o, 2.0 * f);
 
     float d_i = f * d_o / (d_o - f);
     return rpp + d_i;
