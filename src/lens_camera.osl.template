@@ -7,6 +7,11 @@
 #define SURFACE_CYLINDRICAL_X 4
 #define SURFACE_CYLINDRICAL_Y 5
 
+// ライト照準と一様標本化を 1 サンプル MIS で混ぜる割合 (照準側)
+#define LIGHT_AIM_FRACTION 0.7
+// サンのライトデータは半径 0 のため、照準のジッタには実際の太陽の角半径 (rad) を使う
+#define SUN_ANGULAR_RADIUS 0.00436
+
 // extra[i*N_EXTRA + 0] = k (conic constant)
 // extra[i*N_EXTRA + 1] = A4 (4th-order aspheric coefficient)
 // extra[i*N_EXTRA + 2] = A6 (6th-order aspheric coefficient)
@@ -1428,46 +1433,53 @@ float spike_edge_angle(float blade_rot_rad, int edge, int n)
 }
 
 // Aperture diffraction starburst via two-component mixture model.
-// Returns a weight multiplier and sets a transverse direction perturbation.
 // Core rays (most energy) pass through unperturbed; spike rays are deflected
 // along edge-perpendicular directions with Cauchy-sampled sinc² weighting.
-float apply_diffraction(
-    int num_blades, float blade_rot_rad, float lambda_nm,
-    float stop_diameter_mm, float hash1, float hash2, float hash3,
-    output vector perturbation)
+// 光条の PSF は光条 k ごとの「軸方向 sinc²(u/θ0) × 直交方向 sinc²(v/θ0⊥)」を光条数で平均した平面上の密度 (積分 1)
+// ライト照準と MIS で混ぜるには両方の標本化が同じ 2 次元の測度を持つ必要があるため、直交方向も Cauchy で標本化する
+void sample_diffraction_spike(
+    int n, float blade_rot_rad, float theta0, float theta0_perp,
+    float hash_edge, float hash_u, float hash_v,
+    output float px, output float py)
 {
-    perturbation = vector(0, 0, 0);
-
-    if (num_blades < 3)
-        return 1.0;
-
-    int n = num_blades;
-    if (stop_diameter_mm < 1e-6)
-        return 1.0;
-    float theta0 = (lambda_nm * 1e-6) / (stop_diameter_mm * cos(M_PI / float(n)));
-
-    // spike_energy: fraction of PSF energy in diffraction spikes
-    float spike_energy = 0.5 * (1.0 - cos(M_PI / float(n)));
-
-    if (hash1 >= spike_energy)
-        return 1.0;
-
     // Spike ray: select a random edge and sample along its perpendicular
-    int edge = int(floor(hash2 * float(n)));
+    int edge = int(floor(hash_edge * float(n)));
     if (edge >= n) edge = n - 1;
     float spike_angle = spike_edge_angle(blade_rot_rad, edge, n);
 
     // Cauchy with scale 1/π importance-samples sinc² with near-flat weights:
     // peak weight ~1.4 at u≈0.48, vs π≈3.14 with scale 1
-    float h3 = clamp(hash3, 1e-6, 1.0 - 1e-6);
-    float cauchy_u = tan(M_PI * (h3 - 0.5)) / M_PI;
+    float hu = clamp(hash_u, 1e-6, 1.0 - 1e-6);
+    float hv = clamp(hash_v, 1e-6, 1.0 - 1e-6);
+    float u = tan(M_PI * (hu - 0.5)) / M_PI * theta0;
+    float v = tan(M_PI * (hv - 0.5)) / M_PI * theta0_perp;
 
-    float sinc_val = sinc2(cauchy_u);
-    float weight = sinc_val * (1.0 + M_PI * M_PI * cauchy_u * cauchy_u);
+    float c = cos(spike_angle);
+    float s = sin(spike_angle);
+    px = u * c - v * s;
+    py = u * s + v * c;
+}
 
-    float theta = cauchy_u * theta0;
-    perturbation = vector(cos(spike_angle) * theta, sin(spike_angle) * theta, 0.0);
-    return weight;
+// 摂動 (px, py) での光条 PSF と、sample_diffraction_spike() の標本化密度 (全光条の混合) を返す
+void diffraction_psf_pdf(
+    int n, float blade_rot_rad, float theta0, float theta0_perp,
+    float px, float py,
+    output float psf, output float pdf)
+{
+    psf = 0.0;
+    pdf = 0.0;
+    for (int k = 0; k < n; k++) {
+        float a = spike_edge_angle(blade_rot_rad, k, n);
+        float c = cos(a);
+        float s = sin(a);
+        float u = (px * c + py * s) / theta0;
+        float v = (-px * s + py * c) / theta0_perp;
+        psf += sinc2(u) * sinc2(v);
+        pdf += 1.0 / ((1.0 + M_PI * M_PI * u * u) * (1.0 + M_PI * M_PI * v * v));
+    }
+    float norm = 1.0 / (float(n) * theta0 * theta0_perp);
+    psf *= norm;
+    pdf *= norm;
 }
 
 // 直接光・ゴーストとも初期光線に同じ cos^4 減光を掛ける
@@ -1568,9 +1580,52 @@ int select_ghost_pair(
     return ghost_a >= 0;
 }
 
-// ゴースト光線をライトへ向ける照準。ABCD 逆算で得た照準点にライトの見かけの大きさ分のジッタを加える
-// Returns 1 if a light was selected (aim_x / aim_y set), 0 to fall back to uniform sampling.
-int aim_ghost_at_lights(
+// ライト照準の標本化: 強度比でライトを選び、そのライトのジッタ楕円 (中心 cx/cy、半軸 rx/ry) 内で一様に標本化する
+// 密度は light_target_pdf() と厳密に一致させる必要がある (MIS の重みに使うため)
+void sample_light_target(
+    int num_lights, float weights[MAX_LIGHTS], float total,
+    float cx[MAX_LIGHTS], float cy[MAX_LIGHTS],
+    float rx[MAX_LIGHTS], float ry[MAX_LIGHTS],
+    float hash_sel, float hash_r, float hash_a,
+    output float x, output float y)
+{
+    int sel = select_light(num_lights, weights, total, hash_sel);
+    // Guard against floating-point edge case where CDF
+    // scan doesn't match — fall back to last valid light
+    if (sel < 0) {
+        for (int li = 0; li < num_lights; li++) {
+            if (weights[li] > 0.0) sel = li;
+        }
+    }
+    float r = sqrt(hash_r);
+    float a = hash_a * 2.0 * M_PI;
+    x = cx[sel] + r * cos(a) * rx[sel];
+    y = cy[sel] + r * sin(a) * ry[sel];
+}
+
+// sample_light_target() の密度: 全照準ライトのジッタ楕円の一様密度を選択確率で重み付けした和
+float light_target_pdf(
+    int num_lights, float weights[MAX_LIGHTS], float total,
+    float cx[MAX_LIGHTS], float cy[MAX_LIGHTS],
+    float rx[MAX_LIGHTS], float ry[MAX_LIGHTS],
+    float x, float y)
+{
+    float pdf = 0.0;
+    for (int li = 0; li < num_lights; li++) {
+        if (weights[li] <= 0.0) continue;
+        float dx = (x - cx[li]) / rx[li];
+        float dy = (y - cy[li]) / ry[li];
+        if (dx * dx + dy * dy <= 1.0)
+            pdf += weights[li] / (M_PI * rx[li] * ry[li]);
+    }
+    return pdf / total;
+}
+
+// ゴースト光線をライトへ向ける照準先。ABCD 逆算で得た照準面上の点を中心に、ライトの見かけの大きさを照準面へ写した楕円を返す
+// 半径 0 のライト (デルタ分布) は密度を評価できず MIS に混ぜられないため照準対象から外す
+// X/Y どちらかの逆算が退化している画素は楕円にならないため照準しない
+// Returns 1 if any light can be aimed at, 0 for uniform sampling only.
+int ghost_light_targets(
     int num_lights,
     int light_types[MAX_LIGHTS],
     float light_pos[MAX_LIGHTS_3],
@@ -1580,13 +1635,12 @@ int aim_ghost_at_lights(
     float g_Cx, float g_Dx, float g_Cy, float g_Dy,
     float sensor_x, float sensor_y, float sensor_z,
     float aim_z, float ghost_semi_ap, float front_z,
-    float uniform_aim_x, float uniform_aim_y,
-    point rnd,
-    output float aim_x, output float aim_y)
+    output float cx[MAX_LIGHTS], output float cy[MAX_LIGHTS],
+    output float rx[MAX_LIGHTS], output float ry[MAX_LIGHTS],
+    output float weights[MAX_LIGHTS], output float total)
 {
-    float aim_hx[MAX_LIGHTS], aim_hy[MAX_LIGHTS];
-    float aim_weights[MAX_LIGHTS], aim_total = 0.0;
     float denom_x = 0.0, denom_y = 0.0;
+    total = 0.0;
 
     if (!compute_light_aim_points(
             num_lights, light_types, light_pos,
@@ -1594,81 +1648,63 @@ int aim_ghost_at_lights(
             g_Cx, g_Dx, g_Cy, g_Dy,
             sensor_x, sensor_y, sensor_z,
             aim_z, ghost_semi_ap, front_z,
-            aim_hx, aim_hy, aim_weights, aim_total,
+            cx, cy, weights, total,
             denom_x, denom_y))
         return 0;
 
-    int valid_x = abs(denom_x) > 1e-12;
-    int valid_y = abs(denom_y) > 1e-12;
-
-    int sel = select_light(num_lights, aim_weights, aim_total, rng(rnd[0], rnd[1], 4));
-    if (sel < 0)
+    total = 0.0;
+    if (abs(denom_x) <= 1e-12 || abs(denom_y) <= 1e-12)
         return 0;
 
-    aim_x = valid_x ? aim_hx[sel] : uniform_aim_x;
-    aim_y = valid_y ? aim_hy[sel] : uniform_aim_y;
-
-    // Jitter for light angular size
-    if (light_radius[sel] > 0.0) {
+    for (int li = 0; li < num_lights; li++) {
+        if (weights[li] <= 0.0) continue;
+        // Jitter for light angular size
         float radius_angle = 0.0;
-        if (light_types[sel] == 1) {
-            radius_angle = light_radius[sel];
+        if (light_types[li] == 1) {
+            radius_angle = SUN_ANGULAR_RADIUS;
         } else {
-            float lpz = light_pos[sel * 3 + 2];
-            float d = front_z - lpz;
+            float d = front_z - light_pos[li * 3 + 2];
             if (d > 1.0)
-                radius_angle = light_radius[sel] / d;
+                radius_angle = light_radius[li] / d;
         }
-        float jitter_r_x = valid_x ? radius_angle / abs(denom_x) : 0.0;
-        float jitter_r_y = valid_y ? radius_angle / abs(denom_y) : 0.0;
-        float jh = rng(rnd[0], rnd[1], 5);
-        float ja = rnd[1] * 2.0 * M_PI;
-        float jr = sqrt(jh);
-        aim_x += jr * cos(ja) * jitter_r_x;
-        aim_y += jr * sin(ja) * jitter_r_y;
+        if (radius_angle <= 0.0) {
+            weights[li] = 0.0;
+            continue;
+        }
+        rx[li] = radius_angle / abs(denom_x);
+        ry[li] = radius_angle / abs(denom_y);
+        total += weights[li];
     }
-
-    // Clamp to ghost aperture
-    float aim_r = sqrt(aim_x * aim_x + aim_y * aim_y);
-    if (aim_r > ghost_semi_ap) {
-        float scale = ghost_semi_ap / aim_r;
-        aim_x *= scale;
-        aim_y *= scale;
-    }
-    return 1;
+    return total > 0.0 ? 1 : 0;
 }
 
-// 回折光条をライト方向へ向ける照準。光条軸に沿った 2 次元 sinc² の重みに選択確率の逆数を掛けて返す
-// Returns 1 if aimed (diff_perturb / diff_w set), 0 to fall back to apply_diffraction().
-int aim_diffraction_at_lights(
-    int n, float blade_rot_rad, float theta0, float theta0_perp,
+// 回折光条をライト方向へ向ける照準先。射出光線からのライト方向 (tan 空間) を中心に、ライトの角半径の円を返す
+// 半径 0 の点光源は照準対象から外す
+// Returns 1 if any light can be aimed at, 0 for uniform sampling only.
+int diffraction_light_targets(
     int num_lights,
     int light_types[MAX_LIGHTS],
     float light_pos[MAX_LIGHTS_3],
     float light_dir[MAX_LIGHTS_3],
     float light_intensity[MAX_LIGHTS],
     float light_radius[MAX_LIGHTS],
-    point exit_origin, vector exit_dir,
-    point rnd, float diff_h2,
-    output vector diff_perturb, output float diff_w)
+    point exit_origin, float exit_ax, float exit_ay,
+    output float cx[MAX_LIGHTS], output float cy[MAX_LIGHTS],
+    output float r[MAX_LIGHTS],
+    output float weights[MAX_LIGHTS], output float total)
 {
-    // Exit ray angular components (relative to optical axis)
-    float exit_ax = exit_dir[0] / (-exit_dir[2]);
-    float exit_ay = exit_dir[1] / (-exit_dir[2]);
-
-    float theta_lx[MAX_LIGHTS], theta_ly[MAX_LIGHTS];
-    float diff_aim_weights[MAX_LIGHTS];
-    float diff_aim_total = 0.0;
-
+    total = 0.0;
     for (int li = 0; li < num_lights; li++) {
-        diff_aim_weights[li] = 0.0;
+        weights[li] = 0.0;
         float tx = 0.0, ty = 0.0;
+        float light_r = 0.0;
 
         if (light_types[li] == 1) {
             float ldz = light_dir[li * 3 + 2];
             if (ldz >= 0.0) continue;
             tx = -light_dir[li * 3 + 0] / ldz;
             ty = -light_dir[li * 3 + 1] / ldz;
+            light_r = SUN_ANGULAR_RADIUS;
         } else {
             float dx = light_pos[li * 3 + 0] - exit_origin[0];
             float dy = light_pos[li * 3 + 1] - exit_origin[1];
@@ -1676,74 +1712,17 @@ int aim_diffraction_at_lights(
             if (dz >= 0.0) continue;
             tx = dx / (-dz);
             ty = dy / (-dz);
+            light_r = light_radius[li] / (-dz);
         }
+        if (light_r <= 0.0) continue;
         // Relative to exit direction (diffraction PSF is centered there)
-        theta_lx[li] = tx - exit_ax;
-        theta_ly[li] = ty - exit_ay;
-        diff_aim_weights[li] = light_intensity[li];
-        diff_aim_total += light_intensity[li];
+        cx[li] = tx - exit_ax;
+        cy[li] = ty - exit_ay;
+        r[li] = light_r;
+        weights[li] = light_intensity[li];
+        total += light_intensity[li];
     }
-
-    if (diff_aim_total <= 0.0)
-        return 0;
-
-    int sel = select_light(num_lights, diff_aim_weights, diff_aim_total, rng(rnd[0], rnd[1], 10));
-    // Guard against floating-point edge case where CDF
-    // scan doesn't match — fall back to first valid light
-    if (sel < 0) {
-        for (int li = 0; li < num_lights; li++) {
-            if (diff_aim_weights[li] > 0.0) { sel = li; break; }
-        }
-    }
-
-    float lx = theta_lx[sel];
-    float ly = theta_ly[sel];
-
-    // Find spike edge closest to light direction
-    int best_edge = 0;
-    float best_dot = -1.0;
-    float light_angle = atan2(ly, lx);
-    for (int k = 0; k < n; k++) {
-        float spike_a = spike_edge_angle(blade_rot_rad, k, n);
-        float d = abs(cos(spike_a - light_angle));
-        if (d > best_dot) {
-            best_dot = d;
-            best_edge = k;
-        }
-    }
-
-    float spike_a = spike_edge_angle(blade_rot_rad, best_edge, n);
-    float spike_cx = cos(spike_a);
-    float spike_cy = sin(spike_a);
-
-    // Project light onto spike-parallel / perpendicular axes
-    float u_par = lx * spike_cx + ly * spike_cy;
-    float u_perp = -lx * spike_cy + ly * spike_cx;
-
-    // Jitter for extended light sources
-    float light_r = light_radius[sel];
-    if (light_types[sel] == 1) {
-        // Sun radius is 0 in light data; use physical angular radius
-        light_r = 0.00436;
-    } else {
-        float lpz = light_pos[sel * 3 + 2] - exit_origin[2];
-        light_r = (abs(lpz) > 1e-6) ? light_r / abs(lpz) : 0.0;
-    }
-    float jh = rng(rnd[0], rnd[1], 11);
-    float ja = diff_h2 * 2.0 * M_PI;
-    float jr = sqrt(jh);
-    u_par += jr * cos(ja) * light_r;
-    u_perp += jr * sin(ja) * light_r;
-
-    // 2D sinc² weight
-    float sinc_par = sinc2(u_par / theta0);
-    float sinc_perp = sinc2(u_perp / theta0_perp);
-
-    diff_perturb = vector(u_par * spike_cx - u_perp * spike_cy,
-                          u_par * spike_cy + u_perp * spike_cx, 0.0);
-    diff_w = sinc_par * sinc_perp * float(n) * diff_aim_total
-           / (0.7 * light_intensity[sel]);
-    return 1;
+    return total > 0.0 ? 1 : 0;
 }
 
 shader lens_camera(
@@ -2091,40 +2070,52 @@ shader lens_camera(
             g_Cx, g_Dx, g_Cy, g_Dy);
         ghost_semi_ap = min(ghost_semi_ap * 1.1, aim_semi_ap);
 
-        // 70/30 split: aim at lights vs uniform fallback
+        // 70/30 split: aim at lights vs uniform disk, combined by one-sample MIS (balance heuristic)
+        // 重みは f / (0.7·p_aim + 0.3·p_uniform)。照準できるライトがない画素は一様のみで f / p_uniform
         float light_hash = rng(rnd[0], rnd[1], 3);
-        int use_light_aim = 0;
-        float pdf_factor = 1.0;
         float aim_x = 0.0, aim_y = 0.0;
 
         float front_z = vertex_z[0];
+        float ghost_disk_area = M_PI * ghost_semi_ap * ghost_semi_ap;
 
-        // Pre-compute uniform aim point for degenerate-axis fallback
-        float ghost_r_u = sqrt(r_param) * ghost_semi_ap;
-        float ghost_angle_u = rnd[0] * 2.0 * M_PI;
-        float uniform_aim_x = ghost_r_u * cos(ghost_angle_u);
-        float uniform_aim_y = ghost_r_u * sin(ghost_angle_u);
-
-        if (num_lights > 0 && ghost_semi_ap > 0.0 && light_hash < 0.7) {
-            use_light_aim = aim_ghost_at_lights(
+        float tgt_cx[MAX_LIGHTS], tgt_cy[MAX_LIGHTS], tgt_rx[MAX_LIGHTS], tgt_ry[MAX_LIGHTS];
+        float tgt_w[MAX_LIGHTS], tgt_total = 0.0;
+        int has_targets = 0;
+        if (num_lights > 0 && ghost_semi_ap > 0.0) {
+            has_targets = ghost_light_targets(
                 num_lights, light_types, light_pos, light_dir,
                 light_intensity, light_radius,
                 g_Cx, g_Dx, g_Cy, g_Dy,
                 sensor_x, sensor_y, sensor_z,
                 aim_z, ghost_semi_ap, front_z,
-                uniform_aim_x, uniform_aim_y, rnd,
-                aim_x, aim_y);
-            if (use_light_aim)
-                pdf_factor = 1.0 / 0.7;
+                tgt_cx, tgt_cy, tgt_rx, tgt_ry, tgt_w, tgt_total);
         }
 
-        if (!use_light_aim) {
-            aim_x = uniform_aim_x;
-            aim_y = uniform_aim_y;
-            // All uniform samples get the same weight regardless of whether
-            // they came from the 30% pool or a failed light-aim attempt.
-            if (num_lights > 0)
-                pdf_factor = 1.0 / 0.3;
+        if (has_targets && light_hash < LIGHT_AIM_FRACTION) {
+            sample_light_target(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_rx, tgt_ry,
+                                rng(rnd[0], rnd[1], 4), rng(rnd[0], rnd[1], 5), rnd[1],
+                                aim_x, aim_y);
+        } else {
+            float ghost_r_u = sqrt(r_param) * ghost_semi_ap;
+            float ghost_angle_u = rnd[0] * 2.0 * M_PI;
+            aim_x = ghost_r_u * cos(ghost_angle_u);
+            aim_y = ghost_r_u * sin(ghost_angle_u);
+        }
+
+        // 被積分関数は一様標本化の円盤上で定義する。照準楕円が円盤からはみ出した部分の標本は寄与 0
+        // (円盤は通過領域を外側から包むので、はみ出した光線は元々ほぼ通らない)
+        float inv_pdf = 0.0;
+        if (ghost_disk_area > 0.0 && aim_x * aim_x + aim_y * aim_y <= ghost_semi_ap * ghost_semi_ap) {
+            float pdf = 1.0 / ghost_disk_area;
+            if (has_targets)
+                pdf = LIGHT_AIM_FRACTION
+                        * light_target_pdf(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_rx, tgt_ry, aim_x, aim_y)
+                    + (1.0 - LIGHT_AIM_FRACTION) * pdf;
+            inv_pdf = 1.0 / pdf;
+        }
+        if (inv_pdf <= 0.0) {
+            throughput = 0.0;
+            return;
         }
 
         point ghost_aperture = point(aim_x, aim_y, aim_z);
@@ -2149,12 +2140,13 @@ shader lens_camera(
             // the area ratio so ghosts contribute proportional étendue.
             // 直接光と同じく軸上の全射出瞳の面積を基準にする (画素ごとに絞った円盤で割ると周辺でゴーストが明るくなる)
             // 直接光は外接半径 1 の n 角形 (面積 n/2·sin(2π/n)) で標本化するため、円で標本化するゴーストとは形の面積比も掛ける
+            // 一様標本化のみなら 1/pdf は円盤の面積。MIS では混合密度の逆数 inv_pdf に置き換わる
             int n_direct = (aperture_blades >= 3) ? aperture_blades : 128;
             float ngon_area = 0.5 * float(n_direct) * sin(2.0 * M_PI / float(n_direct));
-            float area_ratio = (M_PI * ghost_semi_ap * ghost_semi_ap) / (ngon_area * onaxis_area);
+            float area_ratio = inv_pdf / (ngon_area * onaxis_area);
             float w = weight * (ghost_T / onaxis_T)
                     * (ghost_total_weight / ghost_pair_weight) / frac * ghost_intensity
-                    * pdf_factor * area_ratio;
+                    * area_ratio;
 
             write_camera_ray(ghost_exit, ghost_dir, w, lambda, chromatic_aberration,
                              position, direction, throughput);
@@ -2225,8 +2217,10 @@ shader lens_camera(
             w /= (1.0 - adaptive_frac);
 
         // Aperture diffraction: perturb exit direction to produce starbursts.
-        // 70/30 mixture: aim spikes at scene lights vs Cauchy fallback.
-        if (diffraction && aperture_blades >= 3) {
+        // 70/30 mixture: aim spikes at scene lights vs Cauchy sampling, combined by one-sample MIS (balance heuristic).
+        // 光条の重みは PSF / (0.7·p_aim + 0.3·p_uniform)。照準できるライトがなければ PSF / p_uniform
+        // 摂動は射出方向の tan 空間 (x/-z, y/-z) で与え、照準先のライト方向と同じ空間で扱う
+        if (diffraction && aperture_blades >= 3 && exit_dir[2] < -1e-6) {
             int n = aperture_blades;
             float stop_d = stop_semi_ap * 2.0;
             if (stop_d < 1e-6) stop_d = 1e-6;
@@ -2237,33 +2231,46 @@ shader lens_camera(
             float diff_h2 = rng(rnd[0], rnd[1], 7);
             float diff_h3 = rng(rnd[0], rnd[1], 8);
 
+            // spike_energy: fraction of PSF energy in diffraction spikes
             float spike_energy = 0.5 * (1.0 - cos(M_PI / float(n)));
 
             if (diff_h1 < spike_energy) {
-                float aim_hash = rng(rnd[0], rnd[1], 9);
-                int use_aimed = 0;
-                vector diff_perturb = vector(0, 0, 0);
-                float diff_w = 1.0;
+                // Exit ray angular components (relative to optical axis)
+                float exit_ax = exit_dir[0] / (-exit_dir[2]);
+                float exit_ay = exit_dir[1] / (-exit_dir[2]);
 
-                if (num_lights > 0 && aim_hash < 0.7) {
-                    use_aimed = aim_diffraction_at_lights(
-                        n, blade_rot_rad, theta0, theta0_perp,
+                float tgt_cx[MAX_LIGHTS], tgt_cy[MAX_LIGHTS], tgt_r[MAX_LIGHTS];
+                float tgt_w[MAX_LIGHTS], tgt_total = 0.0;
+                int has_targets = 0;
+                if (num_lights > 0) {
+                    has_targets = diffraction_light_targets(
                         num_lights, light_types, light_pos, light_dir,
                         light_intensity, light_radius,
-                        exit_origin, exit_dir, rnd, diff_h2,
-                        diff_perturb, diff_w);
+                        exit_origin, exit_ax, exit_ay,
+                        tgt_cx, tgt_cy, tgt_r, tgt_w, tgt_total);
                 }
 
-                if (!use_aimed) {
-                    diff_w = apply_diffraction(
-                        aperture_blades, blade_rot_rad, lambda,
-                        stop_d, 0.0, diff_h2, diff_h3, diff_perturb);
-                    if (num_lights > 0)
-                        diff_w /= 0.3;
+                float px = 0.0, py = 0.0;
+                float aim_hash = rng(rnd[0], rnd[1], 9);
+                if (has_targets && aim_hash < LIGHT_AIM_FRACTION) {
+                    sample_light_target(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_r, tgt_r,
+                                        rng(rnd[0], rnd[1], 10), rng(rnd[0], rnd[1], 11), diff_h2,
+                                        px, py);
+                } else {
+                    sample_diffraction_spike(n, blade_rot_rad, theta0, theta0_perp,
+                                             diff_h2, diff_h3, rng(rnd[0], rnd[1], 12),
+                                             px, py);
                 }
 
-                w *= diff_w;
-                exit_dir = normalize(exit_dir + diff_perturb);
+                float psf = 0.0, pdf = 0.0;
+                diffraction_psf_pdf(n, blade_rot_rad, theta0, theta0_perp, px, py, psf, pdf);
+                if (has_targets)
+                    pdf = LIGHT_AIM_FRACTION
+                            * light_target_pdf(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_r, tgt_r, px, py)
+                        + (1.0 - LIGHT_AIM_FRACTION) * pdf;
+
+                w *= (pdf > 0.0) ? psf / pdf : 0.0;
+                exit_dir = normalize(vector(exit_ax + px, exit_ay + py, -1.0));
             }
         }
 
