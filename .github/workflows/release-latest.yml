@@ -1,0 +1,74 @@
+# main の最新コミットを、インストールできる zip として latest リリースに置く
+name: Release latest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 連続で push された時は、古い方の公開を取りやめて最新だけを公開する
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
+env:
+  ZIP_NAME: PhysicalCamera.zip
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read add-on version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("blender_manifest.toml", "rb"))["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build add-on zip
+        run: |
+          # エクステンションの zip は、フォルダで包まずに blender_manifest.toml を直下に置く
+          mkdir -p dist/files
+          cp -r blender_manifest.toml __init__.py src LICENSE README.md README.en.md dist/files/
+          find dist -name "__pycache__" -type d -prune -exec rm -rf {} +
+          (cd dist/files && zip -r -q "../$ZIP_NAME" .)
+          unzip -l "dist/$ZIP_NAME"
+
+      - name: Publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          # 同じ latest タグを使い回すため、前のリリースを消してからタグを最新のコミットへ動かす
+          gh release delete latest --yes || true
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin latest
+          gh release create latest "dist/$ZIP_NAME" \
+            --title "Latest (v$VERSION, $short_sha)" \
+            --notes "main の最新コミット ($GITHUB_SHA) から自動で作成したビルドです。
+
+          Blender の **編集 > プリファレンス > アドオン** の右上のメニューにある **ディスクからインストール...** で、この zip をそのまま選んでください。" \
+            --latest
+
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # blender_manifest.toml のバージョンを上げた時だけ作る。公開済みのバージョンは上書きしない
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION is already released, skipping"
+            exit 0
+          fi
+          versioned_zip="dist/PhysicalCamera-v$VERSION.zip"
+          cp "dist/$ZIP_NAME" "$versioned_zip"
+          gh release create "v$VERSION" "$versioned_zip" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes \
+            --latest=false

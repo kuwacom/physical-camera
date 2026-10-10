@@ -1,0 +1,36 @@
+schema_version = "1.0.0"
+
+id = "osl_camera"
+version = "1.0.0"
+name = "Physical Camera"
+tagline = "Realistic lens simulation for Blender's OSL camera"
+maintainer = "kuwacom"
+type = "add-on"
+
+website = "https://github.com/kuwacom/physical-camera"
+tags = ["Camera", "Render"]
+
+# OSL カメラは Blender 4.5 以降でしか使えないため、これを対応下限とする
+blender_version_min = "4.5.0"
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = [
+  "2026 Peter Simonsson",
+  "2026 kuwacom",
+]
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.github/",
+  "/.venv/",
+  "/.ruff_cache/",
+  "/dist/",
+  "/scripts/",
+  "/pyproject.toml",
+  "/uv.lock",
+  "/AGENTS.md",
+  ".gitignore",
+  "*.zip",
+  "*.oso",
+]

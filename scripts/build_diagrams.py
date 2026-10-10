@@ -10,11 +10,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-_ADDON_DIR = Path(__file__).resolve().parent.parent / "addon"
+_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 
-# Add addon/ to sys.path so we can import lenses directly,
-# bypassing addon/__init__.py which requires bpy
-sys.path.insert(0, str(_ADDON_DIR))
+# Add src/ to sys.path so we can import lenses directly,
+# bypassing src/__init__.py which requires bpy
+sys.path.insert(0, str(_SRC_DIR))
 from lenses import load_lenses
 
 _ICON_SIZE = 256
@@ -411,8 +411,8 @@ def _render_lens(surfaces):
 
 
 def main():
-    lens_dir = _ADDON_DIR / "lenses"
-    output_dir = _ADDON_DIR / "previews"
+    lens_dir = _SRC_DIR / "lenses"
+    output_dir = _SRC_DIR / "previews"
     output_dir.mkdir(exist_ok=True)
 
     lenses = load_lenses(lens_dir)

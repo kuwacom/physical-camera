@@ -4,3 +4,8 @@ __pycache__/
 Renders/
 Textures/
 *.local.json
+.venv/
+.ruff_cache/
+*.pyc
+dist/
+*.zip

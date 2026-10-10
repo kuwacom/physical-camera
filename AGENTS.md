@@ -1,0 +1,123 @@
+# AGENTS.md
+
+## Commands
+
+```sh
+uv sync                            # install dev dependencies (ruff, pillow)
+uv run ruff check .                # lint
+uv run ruff format .               # format
+uv run scripts/build_diagrams.py   # regenerate src/previews/*.png
+blender --command extension validate
+```
+
+## Overview
+
+Physical Camera — a Blender extension that replaces Blender's built-in camera with a physically-based lens simulation using OSL. Rays are traced backwards through real lens prescriptions (spherical surfaces, aperture stops, Fresnel transmission, chromatic dispersion) to produce realistic depth of field, bokeh, and aberrations. Requires Blender 4.5+ with Cycles and OSL enabled.
+
+Accuracy and realism take priority in design decisions. Features with significant per-ray cost should be toggleable so users can pick the accuracy/speed tradeoff — consider approximations or importance sampling before implementing an expensive feature. Features that don't fit the existing architecture should prompt a refactor before implementation, not after.
+
+## Project Layout
+
+- Root `__init__.py` — entry point that only delegates to `src/`; `blender_manifest.toml` sits at the repo root, so the installable zip is built from the root
+- `src/` — the extension package itself; `scripts/build_diagrams.py` (dev-only, excluded from the zip) regenerates the lens diagram PNGs in `src/previews/`
+- `.github/workflows/release-latest.yml` — publishes a `latest` release zip on every push to `main`; bumping the manifest `version` also creates a `vX.Y.Z` release
+
+## Architecture
+
+### OSL Shader (`src/lens_camera.osl.template`)
+
+- `// {{LENS_DATA}}` and `// {{SCENE_LIGHTS}}` placeholders are replaced with generated code at registration time and on depsgraph updates
+- Backward ray tracing (sensor → scene) through a multi-surface lens system, using ABCD matrix optics for focus computation and exit pupil aiming
+- Surfaces are listed front-to-back but traced rear-to-front (sensor side first)
+- `MAX_SURFACES` is 36 — any new lens must fit within this limit
+
+### Extension package (`src/`)
+
+- `__init__.py` — registers properties, operators, and the UI panel in Camera Properties. On register, calls `codegen.generate_osl()` and stores the result in a Blender text datablock
+- `lenses.py` — reads TOML lens files from `src/lenses/` into dicts (no bpy dependency, shared by the build script). Infers a `surface_types` list per lens (`"spherical"`, `"flat"`, `"stop"`, `"aspheric"`, `"cylindrical_x"`, `"cylindrical_y"`)
+- `codegen.py` — generates `load_lens_data()` and injects it into the OSL template: emits `surface_types[]`, `extra[]`, `thicknesses_close[]`, `focus_close_distance`, `squeeze`, and the `SURFACE_*` constants. Also injects `load_scene_lights()` via `inject_scene_lights()`
+- `scene_lights.py` — collects LIGHT objects and emissive meshes in world space and generates `load_scene_lights()`. Positions are in world meters; sun directions are world-space "toward source" vectors. Up to `MAX_LIGHTS` (16), sorted by intensity. Camera-independent — camera movement does not recompile the shader
+- `diagram.py` — loads the PNGs in `src/previews/` as Blender preview icons; `src/lenses/*.toml` are the lens prescriptions (see below)
+
+## Adding a New Lens
+
+1. Create a `.toml` file in `src/lenses/`. Files are loaded alphabetically — the filename determines the UI enum order
+2. Surface data uses the PBRT convention: radii in mm, positive = center of curvature toward the sensor. `aperture` is the full clear diameter in mm (the shader uses `aperture * 0.5`). PhotonsToPhotos labels its column "semi_diameter" but the values are full diameters — use them directly
+3. Exactly one stop per lens: `type = "stop"` with `radius = 0`, `ior = 1.0`. Other surfaces infer their type from `radius` (0 = flat, nonzero = spherical)
+4. Anamorphic lenses: add `squeeze = 2.0` (appropriate factor) to `[lens]` — the shader scales sensor X coordinates by it to desqueeze the output. Spherical lenses omit it (default 1.0). Optionally add a `[focus]` section for variable element spacing (below); without it, unit focusing (sensor-plane movement only)
+5. Regenerate diagrams with `uv run scripts/build_diagrams.py`, then update the "Included Lenses" lists in `README.md` / `README.en.md`
+
+### Variable Element Spacing
+
+```toml
+[focus]
+close_distance = 301.0  # object distance from front vertex, in mm (patent convention)
+[[focus.variable]]
+surface = 16             # 0-based surface index whose thickness varies
+thickness_close = 0.89   # thickness at close_distance (infinity value lives in [[surface]])
+```
+
+- Multiple `[[focus.variable]]` entries support floating-element designs; referenced surfaces must be air gaps (`ior = 1.0`)
+- The shader interpolates linearly in reciprocal object-distance space between the infinity and close-focus calibration points; closer than the calibration point, close-focus thicknesses are used as-is
+
+### Aspheric Surfaces
+
+`type = "aspheric"` with `conic` (conic constant k, optional, default 0.0; -1 = paraboloid) and `aspheric_coeffs` = [A4, A6, A8] or [A4, A6, A8, A10] (even-polynomial coefficients). The surface must have nonzero `radius` (base radius of curvature). Non-aspheric surfaces must not have `aspheric_coeffs` or `conic`.
+
+### Cylindrical Surfaces (Anamorphic)
+
+- `type = "cylindrical_x"` — curvature in the X-Z plane only (X sees a curved surface, Y flat), for horizontal squeeze elements; `type = "cylindrical_y"` — curvature in the Y-Z plane only, for vertical stretch elements. Both must have nonzero `radius` (the curved axis's radius) and must not have `aspheric_coeffs` or `conic`
+- The ABCD paraxial traces carry separate X and Y matrices; sensor distance is derived from the Y axis (spherical meridian), matching cinematographic focus convention. The exit pupil has separate X/Y magnifications, producing elliptical bokeh sampling
+
+## Shader Function Pipeline
+
+1. `load_lens_data()` — generated at registration; outputs `surface_types[]` (`SURFACE_SPHERICAL=0`, `SURFACE_FLAT=1`, `SURFACE_STOP=2`, `SURFACE_ASPHERIC=3`, `SURFACE_CYLINDRICAL_X=4`, `SURFACE_CYLINDRICAL_Y=5`), `extra[]` (8 floats per surface: k, A4, A6, A8, A10, reserved×3), `thicknesses_close[]`, `focus_close_distance`, `squeeze`
+2. `load_scene_lights()` / `transform_lights_to_camera()` — world-space light data converted to camera space (mm) at render time via `transform("world", "camera", ...)`; the shader only regenerates when lights actually change
+3. `rng()` — Jenkins one-at-a-time hash deriving decorrelated uniform [0,1] variates from the two camera random samples (one per salt)
+4. Thickness interpolation — `alpha = clamp(close_distance / d_obj, 0, 1)` in reciprocal object-distance space
+5. `compute_sensor_distance()` — Y-axis ABCD paraxial trace to find the sensor plane position (cylindrical_x surfaces skipped, cylindrical_y contribute); `compute_exit_pupil()` / `compute_field_exit_pupil()` — dual X/Y ABCD matrices for the rear subsystem give exit pupil position/magnification, the latter tightens the disk for off-axis sensor points by projecting rear element apertures
+6. `compute_ghost_aim_radius()` / `compute_light_aim_points()` — ABCD trace/inversion through the full ghost path for light-aimed ghost sampling (also used by debug mode 5)
+7. `trace_lens_system()` — sequential rear-to-front trace calling `refract_at_surface()` per element; includes sphere-overlap retry logic for thin flat surfaces adjacent to curved ones
+8. `find_surface_intersection()` — geometry-only hit test returning intersection point + normal for any surface type (1=hit, 0=miss, -1=clipped); called by `refract_at_surface()` / `reflect_at_surface()`, which apply Snell's law + Fresnel (stops pass through without refraction; reflect is for ghost bounces, never on stops)
+9. `trace_surface_range()` / `trace_ghost_path()` — traces a contiguous surface range (step=±1); a ghost path is three ranges: rear→a (reflect), a+1→b (reflect), b-1→front (refract)
+10. `check_aperture_at_plane()` / `refract_at_flat_plane()` — circular/n-gon aperture clip at a z-plane; Snell's law at a flat surface
+
+Throughput weighting applies cos^4 radiometric falloff and normalizes Fresnel loss against on-axis transmission. When chromatic aberration is enabled, wavelength is sampled uniformly over 400–700nm with golden-ratio decorrelation for the aperture radius sample.
+
+### Ghosts
+
+- When `lens_ghosts` is enabled, a fraction of samples trace ghost paths instead of direct paths. The fraction is adaptive: `clamp(sqrt(ghost_total_weight) * ghost_intensity * 2.0, 0.02, 0.5)`, where `ghost_total_weight` is Σ `R_a × R_b` over all valid Fresnel pairs (non-stop, IOR-changing) — ~37% for uncoated lenses, ~6% for multicoated. Pairs are selected with probability ∝ `R_a × R_b`
+- Ghost throughput: `cos^4 * (ghost_T / onaxis_T) * (ghost_total_weight / ghost_pair_weight) / adaptive_frac * ghost_intensity * pdf_factor * area_ratio` — the weight ratio is the inverse pdf of pair selection, `pdf_factor` compensates the 70/30 aiming split, `area_ratio` scales the ghost-to-direct sampling area
+- Direct throughput (when ghosts active): `cos^4 * (T / onaxis_T) / (1 - adaptive_frac)`
+- 70% of ghost samples are aimed at scene lights via ABCD matrix inversion (lights selected ∝ intensity, jittered for angular size), 30% use uniform disk sampling as fallback. Debug mode 4 "Ghosts Only" traces ghosts for all samples; debug mode 5 "Ghost Aim" shows the aiming pipeline (R=light count, G=aiming valid, B=ghost pair selected)
+
+## Coordinate System
+
+- Lens space: rear element vertex at z=0, front element at z=-total_length, sensor at z=+sensor_distance; -z toward the scene, while Blender camera space has +z toward the scene (output conversion negates z and converts mm to meters, ×0.001)
+- Sphere centers sit at `vertex_z + radius` along the optical axis; ray-sphere intersection picks the hit closest to the vertex (not the far side)
+
+## Key Conventions
+
+- All lens dimensions are in millimeters within the shader; Blender's camera space uses meters
+- `iors[i]` is the medium *after* surface i (toward sensor), not before it
+- The stop clips rays but does not refract. All type branching uses `surface_types[]` constants — never check `radius == 0` or compare against a stop index. `is_curved_surface()` is true for SPHERICAL / ASPHERIC / CYLINDRICAL_X / CYLINDRICAL_Y (used for ABCD power and sphere-overlap logic)
+- `extra[i*N_EXTRA + 0..7]`: slots 0–4 are conic k, A4, A6, A8, A10; slots 5–7 reserved; non-aspheric surfaces are all zeros
+- Focusing uses variable element spacing when `focus_close_distance > 0`, otherwise unit focusing; the ABCD solve computes the correct sensor position for either case
+- Fresnel transmission is tracked per-surface and normalized against on-axis transmission for exposure compensation
+- Coating reflectance uses the Airy thin-film interference formula (quarter-wave MgF₂, nc=1.38, design λ=550nm) with wavelength and angle dependence. Single coating returns the film reflectance directly; multicoating applies a power law (ratio³) clamped to bare Fresnel
+
+## OSL Language Constraints (Blender/Cycles)
+
+- **CPU and OptiX only** — no CUDA, HIP, or Metal
+- No structs, no `#include`, no file I/O — use parallel arrays or multiple variables, everything lives in one `.osl` file, and lens data must be hardcoded or generated into the source
+- Fixed-size arrays only — size must be a compile-time constant (`#define` works)
+- Array shader parameters have a UI bug — values set in the UI may not reach the shader; hardcode arrays inside functions instead
+- `refract(I, N, eta)` returns a zero vector on TIR; `I` must be normalized, `N` must face the incoming ray, `eta = n1/n2`
+- Functions must be declared before use (no forward declarations)
+
+## Blender OSL Camera API
+
+The shader entry point must output `position`, `direction`, and `throughput` (set throughput to 0 to kill a ray). Key built-ins:
+
+- `camera_shader_raster_position()` — normalized sensor position (0–1); `camera_shader_random_sample()` — two uniform random values in x/y
+- `getattribute("cam:sensor_size", ...)` — physical sensor dimensions in mm; `getattribute("cam:focal_distance", ...)` — focus distance in meters
