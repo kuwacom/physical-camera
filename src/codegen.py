@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from .lenses import MAX_SURFACES, load_lenses, paraxial_back_focal_distance
+from .lenses import MAX_SURFACES, load_lenses, paraxial_back_focal_distance, paraxial_entrance_pupil_magnification
 from .scene_lights import generate_light_params, generate_load_scene_lights, generate_scene_light_defines
 
 N_EXTRA = 8
@@ -73,6 +73,7 @@ def _generate_load_lens_data(lens: dict) -> str:
     close_dist = focus["close_distance"] if focus else 0.0
     # 無限遠間隔での前面頂点 -> 後面頂点の距離。レンズだけで決まるのでシェーダーで光線ごとに足し直さない
     total_length_inf = sum(s["thickness"] for s in lens["surfaces"][:-1])
+    surfaces, types = lens["surfaces"], lens["surface_types"]
 
     lines = [
         # 配列サイズは lenses.MAX_SURFACES を唯一の情報源とする
@@ -89,6 +90,9 @@ def _generate_load_lens_data(lens: dict) -> str:
         f"#define TOTAL_LENGTH_INF {float(total_length_inf)!r}",
         # 合焦計算が解けないときの退避先 (無限遠ピントのセンサー位置)。シェーダー内では C≈0 で求められないため事前に計算する
         f"#define SENSOR_DISTANCE_INF {paraxial_back_focal_distance(lens['surfaces'], lens['surface_types'])!r}",
+        # 回折角は被写体側から見た開口 (入射瞳) で決まるため、絞り径をこの倍率で入射瞳径に換算する
+        f"#define ENTRANCE_PUPIL_MAG_X {paraxial_entrance_pupil_magnification(surfaces, types, 'x')!r}",
+        f"#define ENTRANCE_PUPIL_MAG_Y {paraxial_entrance_pupil_magnification(surfaces, types, 'y')!r}",
         "",
         "void load_lens_data(",
         "    output float radii[MAX_SURFACES],",

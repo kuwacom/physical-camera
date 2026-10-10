@@ -58,3 +58,33 @@ def test_focus_and_aspheric_data_are_emitted(template, bundled_lenses):
     assert "thicknesses_close[2] = 1.64;" in osl
     # 非球面の係数は extra[i * N_EXTRA + 1..] に入る
     assert f"extra[{7 * codegen.N_EXTRA + 1}] = -2.2875e-06;" in osl
+
+
+def test_entrance_pupil_magnification_is_emitted(template, bundled_lenses):
+    # 回折角は入射瞳径で決まるため、絞り径に掛ける倍率を軸ごとに焼き込む
+    assert "px / ENTRANCE_PUPIL_MAG_X" in template
+    assert "py / ENTRANCE_PUPIL_MAG_Y" in template
+    for lens in bundled_lenses:
+        osl = codegen.build_camera_osl(template, lens)
+        mag_x = float(re.search(r"#define ENTRANCE_PUPIL_MAG_X (\S+)", osl).group(1))
+        mag_y = float(re.search(r"#define ENTRANCE_PUPIL_MAG_Y (\S+)", osl).group(1))
+        assert 0.1 < mag_x < 10.0 and 0.1 < mag_y < 10.0, lens["filename_stem"]
+        # Y 軸の入射瞳径は開放 f 値 (EFL / 入射瞳径) の計算と一致する
+        _, nu, _, _ = lenses._paraxial_marginal_ray(lens["surfaces"], lens["surface_types"])
+        stop_d = lens["surfaces"][lens["stop_index"]]["aperture"]
+        assert (-1.0 / nu) / (stop_d * mag_y) == pytest.approx(lens["open_fstop"])
+        if not any(t.startswith("cylindrical") for t in lens["surface_types"]):
+            assert mag_x == mag_y
+
+
+def test_entrance_pupil_magnification_values(bundled_lenses):
+    by_stem = {lens["filename_stem"]: lens for lens in bundled_lenses}
+
+    def mag(stem, axis):
+        lens = by_stem[stem]
+        return lenses.paraxial_entrance_pupil_magnification(lens["surfaces"], lens["surface_types"], axis)
+
+    # 前群が負の魚眼は入射瞳が絞りより小さく、前置アナモルフィックは X の入射瞳が Y の約半分になる
+    assert mag("nikkor_fisheye_16mm_f2_8", "y") == pytest.approx(0.405, abs=0.005)
+    assert mag("neil_front_anamorphic_2x", "y") == pytest.approx(1.180, abs=0.005)
+    assert mag("neil_front_anamorphic_2x", "x") == pytest.approx(0.596, abs=0.005)

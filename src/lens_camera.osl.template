@@ -2257,10 +2257,21 @@ shader lens_camera(
                         tgt_cx, tgt_cy, tgt_r, tgt_w, tgt_total);
                 }
 
+                // 被写体側の回折角は物理的な絞りではなく入射瞳の径で決まる。PSF は絞り径 stop_d で定義したまま、
+                // 摂動を軸ごとに入射瞳倍率倍した座標 (絞り基準) で標本化・評価し、最後に倍率で割って被写体側へ戻す
+                // アナモルフィックは X/Y で倍率が違うため、照準の円も同じ座標では楕円になる (ヤコビアンは PSF と密度で打ち消す)
+                float tgt_rx[MAX_LIGHTS], tgt_ry[MAX_LIGHTS];
+                for (int li = 0; li < num_lights; li++) {
+                    tgt_cx[li] *= ENTRANCE_PUPIL_MAG_X;
+                    tgt_cy[li] *= ENTRANCE_PUPIL_MAG_Y;
+                    tgt_rx[li] = tgt_r[li] * ENTRANCE_PUPIL_MAG_X;
+                    tgt_ry[li] = tgt_r[li] * ENTRANCE_PUPIL_MAG_Y;
+                }
+
                 float px = 0.0, py = 0.0;
                 float aim_hash = rng(rnd[0], rnd[1], 9);
                 if (has_targets && aim_hash < LIGHT_AIM_FRACTION) {
-                    sample_light_target(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_r, tgt_r,
+                    sample_light_target(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_rx, tgt_ry,
                                         rng(rnd[0], rnd[1], 10), rng(rnd[0], rnd[1], 11), diff_h2,
                                         px, py);
                 } else {
@@ -2273,11 +2284,12 @@ shader lens_camera(
                 diffraction_psf_pdf(n, blade_rot_rad, theta0, theta0_perp, px, py, psf, pdf);
                 if (has_targets)
                     pdf = LIGHT_AIM_FRACTION
-                            * light_target_pdf(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_r, tgt_r, px, py)
+                            * light_target_pdf(num_lights, tgt_w, tgt_total, tgt_cx, tgt_cy, tgt_rx, tgt_ry, px, py)
                         + (1.0 - LIGHT_AIM_FRACTION) * pdf;
 
                 w *= (pdf > 0.0) ? psf / pdf : 0.0;
-                exit_dir = normalize(vector(exit_ax + px, exit_ay + py, -1.0));
+                exit_dir = normalize(vector(exit_ax + px / ENTRANCE_PUPIL_MAG_X,
+                                            exit_ay + py / ENTRANCE_PUPIL_MAG_Y, -1.0));
             }
         }
 

@@ -70,12 +70,16 @@ def _parse_focus(data: dict, surfaces: list[dict], filename: str) -> dict | None
     return {"close_distance": close_distance, "variables": variables}
 
 
-def _paraxial_marginal_ray(surfaces: list[dict], surface_types: list[str]) -> tuple[float, float, float, float]:
-    """Trace a ray parallel to the Y axis (y=1, nu=0) front to back at infinity spacing.
+def _paraxial_marginal_ray(
+    surfaces: list[dict], surface_types: list[str], axis: str = "y"
+) -> tuple[float, float, float, float]:
+    """Trace a ray parallel to the axis (height 1, nu=0) front to back at infinity spacing.
 
     Returns (y, nu) after the last surface plus the ray height and aperture at the stop.
     """
     # 合焦軸 (Y) に合わせ、Y にパワーを持たない cylindrical_x は平面として扱う
+    # X 軸で追跡するときは逆に cylindrical_y が平面になる
+    flat_cylinder = "cylindrical_x" if axis == "y" else "cylindrical_y"
     y, nu, n = 1.0, 0.0, 1.0
     stop_height = 0.0
     stop_aperture = 0.0
@@ -85,7 +89,7 @@ def _paraxial_marginal_ray(surfaces: list[dict], surface_types: list[str]) -> tu
             stop_height = y
             stop_aperture = s["aperture"]
         n_after = s["ior"]
-        if st not in ("flat", "stop", "cylindrical_x"):
+        if st not in ("flat", "stop", flat_cylinder):
             nu -= y * (n_after - n) / s["radius"]
         n = n_after
         if i < last:
@@ -117,6 +121,16 @@ def paraxial_back_focal_distance(surfaces: list[dict], surface_types: list[str])
     if nu == 0.0:
         raise ValueError("lens has no optical power")
     return -y / nu
+
+
+def paraxial_entrance_pupil_magnification(surfaces: list[dict], surface_types: list[str], axis: str = "y") -> float:
+    """Entrance pupil diameter / stop diameter along one axis (infinity focus)."""
+    # 被写体側の回折角は入射瞳径で決まるため、絞り径に掛ける倍率を求める
+    # アナモルフィックは前群の円柱面で X と Y の入射瞳径が異なるので軸ごとに追跡する
+    _, _, stop_height, _ = _paraxial_marginal_ray(surfaces, surface_types, axis)
+    if stop_height == 0.0:
+        raise ValueError("the marginal ray misses the stop")
+    return 1.0 / abs(stop_height)
 
 
 def min_fstop(lens: dict) -> float:
