@@ -103,6 +103,7 @@ Throughput weighting applies cos^4 radiometric falloff and normalizes Fresnel lo
 - `iors[i]` is the medium *after* surface i (toward sensor), not before it
 - The stop clips rays but does not refract. All type branching uses `surface_types[]` constants — never check `radius == 0` or compare against a stop index. `is_curved_surface()` is true for SPHERICAL / ASPHERIC / CYLINDRICAL_X / CYLINDRICAL_Y (used for ABCD power and sphere-overlap logic)
 - `extra[i*N_EXTRA + 0..7]`: slots 0–4 are conic k, A4, A6, A8, A10; slots 5–7 reserved; non-aspheric surfaces are all zeros
+- f-stop → stop size: `aperture_scale = min(open_fstop / fstop, 1)`, where `open_fstop` is the paraxial (Y-axis, infinity) f-number of the data's full stop computed by `lenses.paraxial_fstop()` (EFL / entrance pupil diameter). `max_fstop` is the nominal label only; the UI minimum is `max(max_fstop, open_fstop)`
 - Focusing uses variable element spacing when `FOCUS_CLOSE_DISTANCE > 0`, otherwise unit focusing; the ABCD solve computes the correct sensor position for either case
 - Fresnel transmission is tracked per-surface and normalized against on-axis transmission for exposure compensation
 - Coating reflectance uses the Airy thin-film interference formula (quarter-wave MgF₂, nc=1.38, design λ=550nm) with wavelength and angle dependence. Single coating returns the film reflectance directly; multicoating applies a power law (ratio³) clamped to bare Fresnel

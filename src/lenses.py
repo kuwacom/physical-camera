@@ -57,6 +57,35 @@ def _parse_focus(data: dict, surfaces: list[dict], filename: str) -> dict | None
     return {"close_distance": close_distance, "variables": variables}
 
 
+def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
+    """Open-aperture f-number from a Y-axis paraxial trace (infinity focus).
+
+    f-number = EFL / entrance pupil diameter, where the entrance pupil is
+    the stop as imaged by the front group.
+    """
+    # 入射瞳は絞りを前群越しに見た像で、絞り径そのものとは一致しないため近軸追跡で求める
+    # 合焦軸 (Y) に合わせ、Y にパワーを持たない cylindrical_x は平面として扱う
+    y, nu, n = 1.0, 0.0, 1.0
+    stop_height = 0.0
+    stop_aperture = 0.0
+    last = len(surfaces) - 1
+    for i, (s, st) in enumerate(zip(surfaces, surface_types, strict=True)):
+        if st == "stop":
+            stop_height = y
+            stop_aperture = s["aperture"]
+        n_after = s["ior"]
+        if st not in ("flat", "stop", "cylindrical_x"):
+            nu -= y * (n_after - n) / s["radius"]
+        n = n_after
+        if i < last:
+            y += s["thickness"] * nu / n
+    if nu >= 0.0 or stop_height == 0.0:
+        raise ValueError("lens has no positive focal length or the marginal ray misses the stop")
+    efl = -1.0 / nu
+    entrance_pupil = stop_aperture / abs(stop_height)
+    return efl / entrance_pupil
+
+
 def load_lenses(lens_dir: Path) -> list[dict]:
     """Read all .toml lens files from lens_dir, sorted by filename."""
     lenses = []
@@ -107,6 +136,7 @@ def load_lenses(lens_dir: Path) -> list[dict]:
                 "filename_stem": toml_path.stem,
                 "focal_length": lens["focal_length"],
                 "max_fstop": lens["max_fstop"],
+                "open_fstop": paraxial_fstop(surfaces, surface_types),
                 "stop_index": stop_index,
                 "coating": coating,
                 "squeeze": squeeze,
