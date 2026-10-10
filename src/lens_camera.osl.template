@@ -638,30 +638,25 @@ float compute_ghost_aim_radius(
 
     // Phase 1: aim plane → bounce_a (step -1, reflect at bounce_a)
     // Refraction (step -1): n_after = iors[i-1] or 1.0
-    for (int i = num_surfaces - 1; i >= bounce_a; i--) {
-        float n_after = (i > 0) ? iors[i - 1] : 1.0;
-        ghost_abcd_surface(i, i == bounce_a, n_after,
-                           radii, apertures, surface_types, vertex_z,
-                           aperture_scale, inv_sensor_aim,
-                           Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
-    }
-
     // Phase 2: bounce_a+1 → bounce_b (step +1, reflect at bounce_b)
     // Refraction (step +1): n_after = iors[i]
-    for (int i = bounce_a + 1; i <= bounce_b; i++) {
-        ghost_abcd_surface(i, i == bounce_b, iors[i],
-                           radii, apertures, surface_types, vertex_z,
-                           aperture_scale, inv_sensor_aim,
-                           Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
-    }
-
     // Phase 3: bounce_b-1 → 0 (step -1, refraction only)
-    for (int i = bounce_b - 1; i >= 0; i--) {
-        float n_after = (i > 0) ? iors[i - 1] : 1.0;
-        ghost_abcd_surface(i, 0, n_after,
+    // OSL は関数を呼び出し箇所ごとにインライン展開するため、3 区間を反射で向きを変える 1 つのループで辿り本体を 1 か所にする
+    int i = num_surfaces - 1;
+    int step = -1;
+    int bounces = 0;
+    while (i >= 0) {
+        int reflect_here = (bounces == 0 && i == bounce_a) || (bounces == 1 && i == bounce_b);
+        float n_after = (step > 0) ? iors[i] : ((i > 0) ? iors[i - 1] : 1.0);
+        ghost_abcd_surface(i, reflect_here, n_after,
                            radii, apertures, surface_types, vertex_z,
                            aperture_scale, inv_sensor_aim,
                            Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
+        if (reflect_here) {
+            bounces += 1;
+            step = -step;
+        }
+        i += step;
     }
 
     out_Cx = Cx;  out_Dx = Dx;
@@ -906,10 +901,14 @@ int find_surface_intersection(
 
     point hit = point(0, 0, 0);
 
+    // 非球面の Newton 反復は呼び出し箇所ごとにインライン展開されて OptiX のコンパイルを重くするため、非球面を持たないレンズでは除く
+#if HAS_ASPHERIC
     if (surface_type == SURFACE_ASPHERIC) {
         if (!intersect_aspheric(ray_origin, ray_dir, vertex_z, radius, k, A4, A6, A8, A10, hit))
             return 0;
-    } else {
+    } else
+#endif
+    {
         float sphere_center_z = vertex_z + radius;
         if (!intersect_curved(ray_origin, ray_dir, sphere_center_z, radius, surface_type, hit))
             return 0;
@@ -919,6 +918,7 @@ int find_surface_intersection(
         return -1;
 
     vector N;
+#if HAS_ASPHERIC
     if (surface_type == SURFACE_ASPHERIC) {
         float c = 1.0 / radius;
         float h = sqrt(hit[0] * hit[0] + hit[1] * hit[1]);
@@ -928,7 +928,9 @@ int find_surface_intersection(
         } else {
             N = vector(0, 0, 1);
         }
-    } else {
+    } else
+#endif
+    {
         float sphere_center_z = vertex_z + radius;
         float mask_x, mask_y;
         curved_axis_mask(surface_type, mask_x, mask_y);
@@ -982,44 +984,22 @@ int refract_at_surface(
     return 1;
 }
 
-// Returns: 1 = success, 0 = miss, -1 = clipped
-int reflect_at_surface(
-    point ray_origin,
-    vector ray_dir,
-    float vertex_z,
-    float radius,
-    float semi_aperture,
-    float n1,
-    float n2,
-    int surface_type,
-    float lambda_nm,
-    float coating,
-    float k, float A4, float A6, float A8, float A10,
-    output point new_origin,
-    output vector new_dir,
-    output float reflectance)
+// ゴースト経路の反射。交点と法線は呼び出し側が屈折と共通の find_surface_intersection() で求めたものを受け取る
+void reflect_with_fresnel(
+    vector d_in, vector N_in, float n1, float n2, float lambda_nm, float coating,
+    output vector new_dir, output float reflectance)
 {
-    point hit = point(0, 0, 0);
-    vector N = vector(0, 0, 0);
-    int result = find_surface_intersection(
-        ray_origin, ray_dir, vertex_z, radius, semi_aperture,
-        surface_type, 0, 0.0,
-        k, A4, A6, A8, A10, hit, N);
-
-    if (result != 1)
-        return result;
-
-    vector I = normalize(ray_dir);
+    vector N = N_in;
+    vector I = normalize(d_in);
     if (dot(I, N) > 0.0)
         N = -N;
 
     float cos_i = abs(dot(I, N));
-    new_origin = hit;
     new_dir = reflect(I, N);
 
     if (n1 == n2) {
         reflectance = 0.0;
-        return 1;
+        return;
     }
 
     float sin_t2 = (n1 * n1) / (n2 * n2) * (1.0 - cos_i * cos_i);
@@ -1027,7 +1007,6 @@ int reflect_at_surface(
     float T = fresnel_transmittance(n1, n2, cos_i, cos_t, lambda_nm, coating);
     // Cap reflectance to suppress near-TIR fireflies in ghost paths
     reflectance = min(1.0 - T, 0.25);
-    return 1;
 }
 
 // 巻き戻し (Mirror) と先回り (Overshoot) の両ケースで同じ平面処理 (開口判定 + 屈折) を行うため共通化する
@@ -1116,11 +1095,16 @@ int trace_lens_system(
     int saved_idx = -1;
 
     // Trace rear-to-front: last surface down to surface 0
+    // OSL は関数を呼び出し箇所ごとにインライン展開するため、巻き戻し後の再試行も同じループの反復で行い
+    // refract_at_surface() と pass_flat_surface() の呼び出しを 1 か所ずつにして OptiX のコンパイルを軽くする
     int skip_count = 0;
-    for (int idx = num_surfaces - 1; idx >= 0; idx--) {
+    int retry = 0;
+    int idx = num_surfaces - 1;
+    while (idx >= 0) {
         if (skip_count > 0) {
             skip_count -= 1;
             saved_idx = -1;
+            idx -= 1;
             continue;
         }
 
@@ -1165,30 +1149,12 @@ int trace_lens_system(
             total_transmission = saved_transmission;
             surfaces_passed = saved_surfaces;
             saved_idx = -1;
-
-            result = refract_at_surface(p, d, vertex_z[idx], radii[idx], semi_ap, n1, n2, num_blades, blade_rotation, surface_types[idx], lambda_nm, coating, k_i, A4_i, A6_i, A8_i, A10_i, new_p, new_d, surface_transmission);
-            if (result != 1) {
-                // refract_at_surface の 0 / -1 / -2 を failure_type の 1 / 2 / 3 に対応させる
-                failure_type = 1 - result;
-                return 0;
-            }
-
-            surfaces_passed += 1;
-            total_transmission *= surface_transmission;
-            p = new_p;
-            d = new_d;
-
-            // Now handle the flat surface we rolled back
-            if (!pass_flat_surface(idx + 1, aperture_scale, vertex_z, iors, apertures, surface_types,
-                                   lambda_nm, num_blades, blade_rotation, coating,
-                                   p, d, total_transmission, failure_type))
-                return 0;
-
-            surfaces_passed += 1;
+            retry = 1;
             continue;
         }
 
         if (result != 1) {
+            // refract_at_surface の 0 / -1 / -2 を failure_type の 1 / 2 / 3 に対応させる
             failure_type = 1 - result;
             return 0;
         }
@@ -1201,17 +1167,27 @@ int trace_lens_system(
         if (is_curved_surface(surface_types[idx]))
             saved_idx = -1;
 
-        // Overshoot: a curved surface hit overshoots past the next flat
-        // surface's vertex. Handle the flat surface now and skip it later.
-        if (idx > 0 && !is_curved_surface(surface_types[idx - 1]) && p[2] < vertex_z[idx - 1]) {
-            if (!pass_flat_surface(idx - 1, aperture_scale, vertex_z, iors, apertures, surface_types,
+        // 巻き戻した場合は後ろの平面 (idx + 1)、先回りの場合は前の平面 (idx - 1) をここで処理する
+        int flat_idx = -1;
+        if (retry) {
+            // Now handle the flat surface we rolled back
+            flat_idx = idx + 1;
+        } else if (idx > 0 && !is_curved_surface(surface_types[idx - 1]) && p[2] < vertex_z[idx - 1]) {
+            // Overshoot: a curved surface hit overshoots past the next flat
+            // surface's vertex. Handle the flat surface now and skip it later.
+            flat_idx = idx - 1;
+            skip_count = 1;
+        }
+        if (flat_idx >= 0) {
+            if (!pass_flat_surface(flat_idx, aperture_scale, vertex_z, iors, apertures, surface_types,
                                    lambda_nm, num_blades, blade_rotation, coating,
                                    p, d, total_transmission, failure_type))
                 return 0;
 
             surfaces_passed += 1;
-            skip_count = 1;
         }
+        retry = 0;
+        idx -= 1;
     }
 
     exit_origin = p;
@@ -1219,89 +1195,14 @@ int trace_lens_system(
     return 1;
 }
 
-// Trace a contiguous range of surfaces [start_idx..end_idx] in the given direction.
-// Refracts at each surface except reflect_at_idx where it reflects instead.
-// iors は trace_lens_system と同じく波長補正済みのものを受け取る
-int trace_surface_range(
-    int start_idx, int end_idx, int step, int reflect_at_idx,
-    point p_in, vector d_in,
-    float aperture_scale,
-    int num_surfaces,
-    float radii[MAX_SURFACES],
-    float iors[MAX_SURFACES],
-    float apertures[MAX_SURFACES],
-    int surface_types[MAX_SURFACES],
-    float extra[MAX_EXTRA],
-    float vertex_z[MAX_SURFACES],
-    float lambda_nm,
-    int num_blades,
-    float blade_rotation,
-    float coating,
-    output point p_out,
-    output vector d_out,
-    output float total_transmission)
-{
-    p_out = p_in;
-    d_out = d_in;
-    total_transmission = 1.0;
-
-    for (int idx = start_idx; ; idx += step) {
-        float semi_ap = surface_semi_aperture(idx, apertures, surface_types, aperture_scale);
-
-        float n1, n2;
-        if (step < 0) {
-            n1 = iors[idx];
-            n2 = (idx > 0) ? iors[idx - 1] : 1.0;
-        } else {
-            n1 = (idx > 0) ? iors[idx - 1] : 1.0;
-            n2 = iors[idx];
-        }
-        if (surface_types[idx] == SURFACE_STOP) {
-            n1 = 1.0;
-            n2 = 1.0;
-        }
-
-        int base = idx * N_EXTRA;
-        float k_i = extra[base], A4_i = extra[base + 1], A6_i = extra[base + 2];
-        float A8_i = extra[base + 3], A10_i = extra[base + 4];
-
-        point new_p = point(0, 0, 0);
-        vector new_d = vector(0, 0, 0);
-
-        if (idx == reflect_at_idx) {
-            float reflectance = 0.0;
-            int result = reflect_at_surface(
-                p_out, d_out, vertex_z[idx], radii[idx], semi_ap,
-                n1, n2, surface_types[idx], lambda_nm, coating,
-                k_i, A4_i, A6_i, A8_i, A10_i,
-                new_p, new_d, reflectance);
-            if (result != 1)
-                return 0;
-            total_transmission *= reflectance;
-        } else {
-            float trans = 1.0;
-            int result = refract_at_surface(
-                p_out, d_out, vertex_z[idx], radii[idx], semi_ap,
-                n1, n2, num_blades, blade_rotation, surface_types[idx], lambda_nm, coating,
-                k_i, A4_i, A6_i, A8_i, A10_i,
-                new_p, new_d, trans);
-            if (result != 1)
-                return 0;
-            total_transmission *= trans;
-        }
-
-        p_out = new_p;
-        d_out = new_d;
-
-        if (idx == end_idx)
-            break;
-    }
-
-    return 1;
-}
-
 // Trace a ghost path with two reflections: bounce_a (front-ward) and bounce_b (rear-ward).
 // bounce_a < bounce_b. The ray refracts normally except at the two bounce surfaces.
+// Phase 1: sensor → front, reflect at bounce_a
+// Phase 2: front → rear, reflect at bounce_b
+// Phase 3: rear → front, normal refraction to exit
+// iors は trace_lens_system と同じく波長補正済みのものを受け取る
+// OSL は関数を呼び出し箇所ごとにインライン展開するため、3 区間を反射で向きを変える 1 つのループで辿り、
+// 交点計算 (非球面の Newton 反復を含む) を 1 か所にして OptiX のコンパイルを軽くする
 int trace_ghost_path(
     int bounce_a, int bounce_b,
     point p_in, vector d_in,
@@ -1324,38 +1225,57 @@ int trace_ghost_path(
     total_transmission = 1.0;
     p_out = p_in;
     d_out = d_in;
-    float phase_T = 1.0;
 
-    // Phase 1: sensor → front, reflect at bounce_a
-    if (!trace_surface_range(
-            num_surfaces - 1, bounce_a, -1, bounce_a,
-            p_out, d_out, aperture_scale, num_surfaces,
-            radii, iors, apertures, surface_types, extra, vertex_z,
-            lambda_nm, num_blades, blade_rotation, coating,
-            p_out, d_out, phase_T))
-        return 0;
-    total_transmission *= phase_T;
+    int idx = num_surfaces - 1;
+    int step = -1;
+    int bounces = 0;
+    while (idx >= 0) {
+        int reflect_here = (bounces == 0 && idx == bounce_a) || (bounces == 1 && idx == bounce_b);
+        float semi_ap = surface_semi_aperture(idx, apertures, surface_types, aperture_scale);
 
-    // Phase 2: front → rear, reflect at bounce_b
-    if (!trace_surface_range(
-            bounce_a + 1, bounce_b, 1, bounce_b,
-            p_out, d_out, aperture_scale, num_surfaces,
-            radii, iors, apertures, surface_types, extra, vertex_z,
-            lambda_nm, num_blades, blade_rotation, coating,
-            p_out, d_out, phase_T))
-        return 0;
-    total_transmission *= phase_T;
+        float n1, n2;
+        if (step < 0) {
+            n1 = iors[idx];
+            n2 = (idx > 0) ? iors[idx - 1] : 1.0;
+        } else {
+            n1 = (idx > 0) ? iors[idx - 1] : 1.0;
+            n2 = iors[idx];
+        }
+        if (surface_types[idx] == SURFACE_STOP) {
+            n1 = 1.0;
+            n2 = 1.0;
+        }
 
-    // Phase 3: rear → front, normal refraction to exit
-    if (bounce_b > 0) {
-        if (!trace_surface_range(
-                bounce_b - 1, 0, -1, -1,
-                p_out, d_out, aperture_scale, num_surfaces,
-                radii, iors, apertures, surface_types, extra, vertex_z,
-                lambda_nm, num_blades, blade_rotation, coating,
-                p_out, d_out, phase_T))
+        int base = idx * N_EXTRA;
+        float k_i = extra[base], A4_i = extra[base + 1], A6_i = extra[base + 2];
+        float A8_i = extra[base + 3], A10_i = extra[base + 4];
+
+        point hit = point(0, 0, 0);
+        vector N = vector(0, 0, 0);
+        // 反射面は絞りにならないため、羽根の n 角形の判定は屈折と同じ引数のままでよい
+        if (find_surface_intersection(p_out, d_out, vertex_z[idx], radii[idx], semi_ap,
+                                      surface_types[idx], num_blades, blade_rotation,
+                                      k_i, A4_i, A6_i, A8_i, A10_i, hit, N) != 1)
             return 0;
-        total_transmission *= phase_T;
+
+        if (reflect_here) {
+            vector new_d = vector(0, 0, 0);
+            float reflectance = 0.0;
+            reflect_with_fresnel(d_out, N, n1, n2, lambda_nm, coating, new_d, reflectance);
+            d_out = new_d;
+            total_transmission *= reflectance;
+            bounces += 1;
+            step = -step;
+        } else if (surface_types[idx] != SURFACE_STOP) {
+            vector new_d = vector(0, 0, 0);
+            float trans = 1.0;
+            if (!refract_with_fresnel(d_out, N, n1, n2, lambda_nm, coating, new_d, trans))
+                return 0;
+            d_out = new_d;
+            total_transmission *= trans;
+        }
+        p_out = hit;
+        idx += step;
     }
 
     return 1;

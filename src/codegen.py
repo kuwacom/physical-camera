@@ -92,6 +92,8 @@ def _generate_load_lens_data(lens: dict) -> str:
         f"#define MAX_EXTRA {MAX_SURFACES * N_EXTRA}",
         "",
         f"#define NUM_SURFACES {len(lens['surfaces'])}",
+        # 使わない面の型の処理をシェーダーから除いて OptiX のコンパイルを軽くする
+        f"#define HAS_ASPHERIC {int('aspheric' in types)}",
         f"#define COATING {coating_val}",
         f"#define SQUEEZE {float(lens['squeeze'])}",
         f"#define FOCUS_CLOSE_DISTANCE {close_dist}",
