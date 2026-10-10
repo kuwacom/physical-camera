@@ -12,6 +12,7 @@ Blender のカメラを、物理ベースのレンズシミュレーションに
 - アナモルフィックレンズ対応(X/Y 2 軸の ABCD 光学と楕円ボケ)
 - シングル/マルチコーティングの Fresnel 透過損失と自然なケラレ
 - 分光的な色収差(400〜700nm を連続サンプリング)
+- レンズ内反射によるゴーストと絞り回折の光条
 - 特許データがあるレンズは群レンズ間隔可変のインナーフォーカスに対応
 - 回転角を調整できる多角形絞り羽根
 - ピント距離は Blender のカメラ設定に連動
@@ -47,13 +48,27 @@ blender --command extension build
 3. **Physical Lens** パネルの **Enable Physical Lens** をクリックします
 4. レンズを選び、設定を調整します
    - **Lens** — 使用するレンズの構成
-   - **f-stop** — 絞りの大きさ(レンズの最大値に制限されます)
+   - **f-stop** — 絞りの大きさ。下限はレンズの開放 F 値(レンズデータから近軸計算した実効値)で、パネルに表示されます
    - **Aperture Blades** — 0 で円形、3 以上で多角形のボケ
    - **Blade Rotation** — 絞り形状の回転
    - **Chromatic Aberration** — 分光分散の切り替え
-   - **Debug Mode** — Normal / Pinhole / Diagnostic(失敗の可視化)/ Exit Direction
+   - **Lens Ghosts** — レンズ内反射によるゴーストのオン/オフ
+   - **Ghost Intensity** — ゴーストの明るさの倍率(Lens Ghosts 有効時に表示)
+   - **Diffraction** — 絞り回折による光条のシミュレーション(Aperture Blades が 3 以上のときのみ有効)
+   - **Debug Mode** — Normal / Pinhole / Diagnostic(失敗の可視化)/ Exit Direction / Ghosts Only(ゴーストだけを描画)/ Ghost Aim(ゴーストの照準の診断)
 
 ピント距離は、Blender 標準のカメラ Depth of Field 設定で制御します
+
+### ゴーストと回折
+
+Lens Ghosts と Diffraction は、シーンのライトを光源としてサンプリングします  
+使用するライトには **オブジェクトプロパティ > 可視性 > レイの可視性 > カメラ** を ON にしてください(Blender の既定は OFF)  
+発光メッシュも光源として扱います
+
+パネルには、レンダリングを妨げる問題が警告として表示されます(Cycles が無効、GPU デバイスが OptiX 以外、カメラレイから見えるライトが 0 件など)  
+物理レンズをやめて通常のカメラに戻すには、パネルの **Disable Physical Lens** をクリックします
+
+Cycles の Custom Camera にある **Parameters** の値(aperture_blades など)はアドオンが自動で管理するため、編集しないでください
 
 ## 収録レンズ
 
@@ -113,7 +128,7 @@ abbe_v = 0.0
 開発環境は [uv](https://docs.astral.sh/uv/) で管理しています
 
 ```sh
-# 開発用の依存関係をインストール(ruff, pillow)
+# 開発用の依存関係をインストール(ruff, pillow, pytest)
 uv sync
 
 # 静的チェック
@@ -121,6 +136,9 @@ uv run ruff check .
 
 # コードを整形
 uv run ruff format .
+
+# テストを実行
+uv run pytest
 ```
 
 ## ライセンス

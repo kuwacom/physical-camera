@@ -11,6 +11,7 @@ A Blender extension that replaces Blender's built-in camera with a physically-ba
 - Anamorphic lens support with dual-axis ABCD optics and elliptical bokeh
 - Fresnel transmission loss with single/multi coating models and natural vignetting
 - Spectral chromatic aberration (400-700nm continuous sampling)
+- Lens ghosts from internal reflections and aperture diffraction spikes
 - Variable element spacing for internal focusing (when patent data is available)
 - Polygonal aperture blades with adjustable rotation
 - Focus distance driven by Blender's camera settings
@@ -46,13 +47,24 @@ blender --command extension build
 3. In the "Physical Lens" panel, click "Enable Physical Lens"
 4. Choose a lens and adjust settings:
    - **Lens** — select from available lens prescriptions
-   - **f-stop** — aperture size (clamped to the lens's maximum)
+   - **f-stop** — aperture size (the minimum is the lens's open f-number, computed paraxially from the lens data and shown in the panel)
    - **Aperture Blades** — 0 for circular, 3+ for polygonal bokeh
    - **Blade Rotation** — rotate the aperture shape
    - **Chromatic Aberration** — toggle spectral dispersion
-   - **Debug Mode** — Normal, Pinhole, Diagnostic (failure visualization), or Exit Direction
+   - **Lens Ghosts** — toggle ghost images from internal lens reflections
+   - **Ghost Intensity** — brightness multiplier for ghosts (shown when Lens Ghosts is on)
+   - **Diffraction** — simulate aperture diffraction starbursts (effective only with 3 or more aperture blades)
+   - **Debug Mode** — Normal, Pinhole, Diagnostic (failure visualization), Exit Direction, Ghosts Only (renders only the ghosts), or Ghost Aim (ghost aiming diagnostic)
 
 Focus distance is controlled through Blender's standard camera Depth of Field settings.
+
+### Ghosts and Diffraction
+
+Lens Ghosts and Diffraction sample the scene's lights as sources. Enable **Object Properties > Visibility > Ray Visibility > Camera** on the lights you want to use (off by default in Blender). Emissive meshes are also treated as light sources.
+
+The panel shows warnings for problems that prevent rendering (Cycles disabled, a GPU device other than OptiX, no lights visible to camera rays, etc.). To go back to a standard camera, click **Disable Physical Lens** in the panel.
+
+The values under **Parameters** in Cycles' Custom Camera (e.g. aperture_blades) are managed by the extension automatically — do not edit them by hand.
 
 ## Included Lenses
 
@@ -112,7 +124,7 @@ See [AGENTS.md](AGENTS.md) for details on variable element spacing, aspheric coe
 Development dependencies are managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-# Install dev dependencies (ruff, pillow)
+# Install dev dependencies (ruff, pillow, pytest)
 uv sync
 
 # Lint
@@ -120,6 +132,9 @@ uv run ruff check .
 
 # Format
 uv run ruff format .
+
+# Run tests
+uv run pytest
 ```
 
 ## License
