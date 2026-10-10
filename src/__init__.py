@@ -91,10 +91,12 @@ def _build_camera_shader(cam, osl_source=None):
 
 def _report_shader_message(cam):
     def report(otype, message):
+        # cycles は種別を {'ERROR'} のような集合で渡してくるため、単一文字列の場合も集合に揃えて判定する
+        types = {otype} if isinstance(otype, str) else set(otype)
         # コンパイルが成功するたびにコンソールへ出力されると他のログが埋まるため、問題が起きたときだけ表示する
-        if otype not in {"ERROR", "WARNING"}:
+        if not types & {"ERROR", "WARNING"}:
             return
-        if otype == "ERROR":
+        if "ERROR" in types:
             # パネルに表示するため最新のエラーをカメラ名で保持する
             _compile_errors[cam.name] = message
         print(f"Physical Camera: {message}")
