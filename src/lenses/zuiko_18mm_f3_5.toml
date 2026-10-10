@@ -11,70 +11,70 @@ coating = "single"
 radius = 104.25
 thickness = 3.41
 ior = 1.834
-aperture = 103.12
+aperture = 51.56
 abbe_v = 37.19
 
 [[surface]]
 radius = 240.26
 thickness = 0.20
 ior = 1.0
-aperture = 103.12
+aperture = 51.56
 abbe_v = 0.0
 
 [[surface]]
 radius = 31.51
 thickness = 1.61
 ior = 1.67
-aperture = 69.56
+aperture = 34.78
 abbe_v = 57.33
 
 [[surface]]
 radius = 12.72
 thickness = 4.92
 ior = 1.0
-aperture = 45.04
+aperture = 22.52
 abbe_v = 0.0
 
 [[surface]]
 radius = 32.67
 thickness = 1.59
 ior = 1.67
-aperture = 50.78
+aperture = 25.39
 abbe_v = 57.33
 
 [[surface]]
 radius = 18.25
 thickness = 4.26
 ior = 1.0
-aperture = 41.02
+aperture = 20.51
 abbe_v = 0.0
 
 [[surface]]
 radius = 78.06
 thickness = 4.27
 ior = 1.804
-aperture = 40.44
+aperture = 20.22
 abbe_v = 46.57
 
 [[surface]]
 radius = -368.49
 thickness = 0.20
 ior = 1.0
-aperture = 40.44
+aperture = 20.22
 abbe_v = 0.0
 
 [[surface]]
 radius = 19.46
 thickness = 1.0
 ior = 1.6968
-aperture = 28.32
+aperture = 14.16
 abbe_v = 55.62
 
 [[surface]]
 radius = 10.26
 thickness = 1.82
 ior = 1.0
-aperture = 22.08
+aperture = 11.04
 abbe_v = 0.0
 
 # Cemented doublet
@@ -83,21 +83,21 @@ abbe_v = 0.0
 radius = 27.31
 thickness = 1.0
 ior = 1.6968
-aperture = 22.08
+aperture = 11.04
 abbe_v = 55.62
 
 [[surface]]
 radius = 9.67
 thickness = 8.31
 ior = 1.5927
-aperture = 22.08
+aperture = 11.04
 abbe_v = 35.24
 
 [[surface]]
 radius = 398.15
 thickness = 1.42
 ior = 1.0
-aperture = 22.08
+aperture = 11.04
 abbe_v = 0.0
 
 # Aperture stop
@@ -107,7 +107,7 @@ type = "stop"
 radius = 0.0
 thickness = 1.42
 ior = 1.0
-aperture = 19.42
+aperture = 9.71
 abbe_v = 0.0
 
 # Rear group (convergent) — cemented doublet
@@ -116,63 +116,63 @@ abbe_v = 0.0
 radius = 159.94
 thickness = 6.03
 ior = 1.64
-aperture = 22.36
+aperture = 11.18
 abbe_v = 60.25
 
 [[surface]]
 radius = -13.78
 thickness = 1.0
 ior = 1.51454
-aperture = 22.36
+aperture = 11.18
 abbe_v = 54.69
 
 [[surface]]
 radius = -19.85
 thickness = 2.21
 ior = 1.0
-aperture = 22.36
+aperture = 11.18
 abbe_v = 0.0
 
 [[surface]]
 radius = -34.15
 thickness = 1.0
 ior = 1.80518
-aperture = 28.14
+aperture = 14.07
 abbe_v = 25.43
 
 [[surface]]
 radius = 41.99
 thickness = 1.0
 ior = 1.0
-aperture = 28.14
+aperture = 14.07
 abbe_v = 0.0
 
 [[surface]]
 radius = -960.13
 thickness = 2.51
 ior = 1.618
-aperture = 32.5
+aperture = 16.25
 abbe_v = 63.38
 
 [[surface]]
 radius = -17.94
 thickness = 0.15
 ior = 1.0
-aperture = 32.5
+aperture = 16.25
 abbe_v = 0.0
 
 [[surface]]
 radius = -47.59
 thickness = 2.26
 ior = 1.618
-aperture = 37.12
+aperture = 18.56
 abbe_v = 63.38
 
 [[surface]]
 radius = -20.12
 thickness = 0.0
 ior = 1.0
-aperture = 37.12
+aperture = 18.56
 abbe_v = 0.0
 
 [focus]

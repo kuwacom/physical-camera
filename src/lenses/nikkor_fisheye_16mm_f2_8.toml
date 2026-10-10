@@ -11,28 +11,28 @@ coating = "multi"
 radius = 69.258
 thickness = 1.70
 ior = 1.64
-aperture = 105.22
+aperture = 52.61
 abbe_v = 60.0
 
 [[surface]]
 radius = 15.165
 thickness = 10.25
 ior = 1.0
-aperture = 58.6
+aperture = 29.3
 abbe_v = 0.0
 
 [[surface]]
 radius = 130.305
 thickness = 1.70
 ior = 1.62041
-aperture = 60.54
+aperture = 30.27
 abbe_v = 60.1
 
 [[surface]]
 radius = 14.794
 thickness = 4.00
 ior = 1.0
-aperture = 45.64
+aperture = 22.82
 abbe_v = 0.0
 
 # Cemented doublet
@@ -41,21 +41,21 @@ abbe_v = 0.0
 radius = 32.412
 thickness = 8.00
 ior = 1.62588
-aperture = 40.54
+aperture = 20.27
 abbe_v = 35.7
 
 [[surface]]
 radius = -15.298
 thickness = 9.00
 ior = 1.79668
-aperture = 40.54
+aperture = 20.27
 abbe_v = 45.4
 
 [[surface]]
 radius = -38.75
 thickness = 7.05
 ior = 1.0
-aperture = 28.96
+aperture = 14.48
 abbe_v = 0.0
 
 # Aperture stop
@@ -65,7 +65,7 @@ type = "stop"
 radius = 0.0
 thickness = 3.93
 ior = 1.0
-aperture = 28.714
+aperture = 14.357
 abbe_v = 0.0
 
 # Cemented doublet
@@ -74,21 +74,21 @@ abbe_v = 0.0
 radius = -81.004
 thickness = 1.20
 ior = 1.58144
-aperture = 30.8
+aperture = 15.4
 abbe_v = 40.8
 
 [[surface]]
 radius = 24.002
 thickness = 5.00
 ior = 1.51823
-aperture = 33.22
+aperture = 16.61
 abbe_v = 58.9
 
 [[surface]]
 radius = -20.608
 thickness = 0.89
 ior = 1.0
-aperture = 33.22
+aperture = 16.61
 abbe_v = 0.0
 
 # Cemented doublet
@@ -97,21 +97,21 @@ abbe_v = 0.0
 radius = 46.733
 thickness = 5.50
 ior = 1.5186
-aperture = 39.26
+aperture = 19.63
 abbe_v = 70.0
 
 [[surface]]
 radius = -19.219
 thickness = 1.30
 ior = 1.7847
-aperture = 39.26
+aperture = 19.63
 abbe_v = 26.1
 
 [[surface]]
 radius = -40.706
 thickness = 0.85
 ior = 1.0
-aperture = 43.32
+aperture = 21.66
 abbe_v = 0.0
 
 # Rear filter plate
@@ -120,14 +120,14 @@ abbe_v = 0.0
 radius = 0.0
 thickness = 1.20
 ior = 1.5168
-aperture = 46.42
+aperture = 23.21
 abbe_v = 64.1
 
 [[surface]]
 radius = 0.0
 thickness = 0.0
 ior = 1.0
-aperture = 46.42
+aperture = 23.21
 abbe_v = 0.0
 
 [focus]

@@ -47,7 +47,7 @@ Accuracy and realism take priority in design decisions. Features with significan
 ## Adding a New Lens
 
 1. Create a `.toml` file in `src/lenses/`. Files are loaded alphabetically — the filename determines the UI enum order
-2. Surface data uses the PBRT convention: radii in mm, positive = center of curvature toward the sensor. `aperture` is the full clear diameter in mm (the shader uses `aperture * 0.5`). PhotonsToPhotos labels its column "semi_diameter" but the values are full diameters — use them directly
+2. Surface data uses the PBRT convention: radii in mm, positive = center of curvature toward the sensor. `aperture` is the full clear diameter in mm (the shader uses `aperture * 0.5`). PhotonsToPhotos labels its column "semi_diameter" but the values are full diameters — use them directly. Patent "effective (ray) diameter" columns are full diameters as well; never double them (a doubled table makes `aperture / 2` exceed `|R|` and the paraxial open f-number come out at half the label)
 3. Exactly one stop per lens: `type = "stop"` with `radius = 0`, `ior = 1.0`. Other surfaces infer their type from `radius` (0 = flat, nonzero = spherical)
 4. Anamorphic lenses: add `squeeze = 2.0` (appropriate factor) to `[lens]` — the shader scales sensor X coordinates by it to desqueeze the output. Spherical lenses omit it (default 1.0). Optionally add a `[focus]` section for variable element spacing (below); without it, unit focusing (sensor-plane movement only)
 5. Regenerate diagrams with `uv run scripts/build_diagrams.py`, then update the "Included Lenses" lists in `README.md` / `README.en.md`

@@ -11,21 +11,21 @@ coating = "multi"
 radius = 71.655
 thickness = 15.57
 ior = 1.618
-aperture = 140.4
+aperture = 70.2
 abbe_v = 63.4
 
 [[surface]]
 radius = -149.456
 thickness = 3.0
 ior = 1.72047
-aperture = 140.4
+aperture = 70.2
 abbe_v = 34.7
 
 [[surface]]
 radius = 112.469
 thickness = 14.36
 ior = 1.0
-aperture = 129.26
+aperture = 64.63
 abbe_v = 0.0
 
 # Focus group (L2)
@@ -34,28 +34,28 @@ abbe_v = 0.0
 radius = 67.332
 thickness = 5.75
 ior = 1.92286
-aperture = 123.04
+aperture = 61.52
 abbe_v = 20.9
 
 [[surface]]
 radius = 141.236
 thickness = 0.3
 ior = 1.0
-aperture = 121.2
+aperture = 60.6
 abbe_v = 0.0
 
 [[surface]]
 radius = 39.868
 thickness = 11.43
 ior = 1.497
-aperture = 110.0
+aperture = 55.0
 abbe_v = 81.5
 
 [[surface]]
 radius = 200.86
 thickness = 6.51
 ior = 1.0
-aperture = 105.44
+aperture = 52.72
 abbe_v = 0.0
 
 [[surface]]
@@ -63,7 +63,7 @@ type = "aspheric"
 radius = 75.484
 thickness = 2.5
 ior = 1.85478
-aperture = 82.48
+aperture = 41.24
 abbe_v = 24.8
 conic = 0.0
 aspheric_coeffs = [-2.2875e-6, -2.1286e-10, 2.6709e-13]
@@ -72,7 +72,7 @@ aspheric_coeffs = [-2.2875e-6, -2.1286e-10, 2.6709e-13]
 radius = 27.701
 thickness = 10.68
 ior = 1.0
-aperture = 70.32
+aperture = 35.16
 abbe_v = 0.0
 
 # Aperture stop
@@ -82,56 +82,56 @@ type = "stop"
 radius = 0.0
 thickness = 4.51
 ior = 1.0
-aperture = 66.2
+aperture = 33.1
 abbe_v = 0.0
 
 [[surface]]
 radius = -85.831
 thickness = 1.5
 ior = 1.85478
-aperture = 63.34
+aperture = 31.67
 abbe_v = 24.8
 
 [[surface]]
 radius = 33.313
 thickness = 9.5
 ior = 1.883
-aperture = 62.4
+aperture = 31.2
 abbe_v = 40.8
 
 [[surface]]
 radius = -68.563
 thickness = 2.28
 ior = 1.0
-aperture = 61.76
+aperture = 30.88
 abbe_v = 0.0
 
 [[surface]]
 radius = -48.43
 thickness = 1.7
 ior = 1.54072
-aperture = 59.7
+aperture = 29.85
 abbe_v = 47.2
 
 [[surface]]
 radius = 58.169
 thickness = 1.0
 ior = 1.60401
-aperture = 68.0
+aperture = 34.0
 abbe_v = 20.8
 
 [[surface]]
 radius = 77.751
 thickness = 6.95
 ior = 1.95375
-aperture = 68.44
+aperture = 34.22
 abbe_v = 32.3
 
 [[surface]]
 radius = -77.751
 thickness = 1.64
 ior = 1.0
-aperture = 70.8
+aperture = 35.4
 abbe_v = 0.0
 
 # Rear group (L3)
@@ -140,49 +140,49 @@ abbe_v = 0.0
 radius = 204.839
 thickness = 7.0
 ior = 1.95375
-aperture = 73.7
+aperture = 36.85
 abbe_v = 32.3
 
 [[surface]]
 radius = -48.06
 thickness = 2.2
 ior = 1.62004
-aperture = 74.06
+aperture = 37.03
 abbe_v = 36.3
 
 [[surface]]
 radius = 97.164
 thickness = 5.4
 ior = 1.0
-aperture = 72.8
+aperture = 36.4
 abbe_v = 0.0
 
 [[surface]]
 radius = -52.101
 thickness = 1.65
 ior = 1.68893
-aperture = 72.88
+aperture = 36.44
 abbe_v = 31.1
 
 [[surface]]
 radius = 237.864
 thickness = 0.15
 ior = 1.0
-aperture = 76.98
+aperture = 38.49
 abbe_v = 0.0
 
 [[surface]]
 radius = 97.826
 thickness = 4.0
 ior = 1.90043
-aperture = 79.1
+aperture = 39.55
 abbe_v = 37.4
 
 [[surface]]
 radius = -370.202
 thickness = 0.0
 ior = 1.0
-aperture = 79.58
+aperture = 39.79
 abbe_v = 0.0
 
 [focus]
