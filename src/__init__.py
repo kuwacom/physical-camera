@@ -20,9 +20,7 @@ _lens_registry: list[dict] = []
 _lens_items: list[tuple] = []
 _lens_map: dict[str, dict] = {}
 _osl_template: str = ""
-_lights: list = []
 _updating_lights: bool = False
-_cached_light_key = None
 
 
 def _get_lens(props) -> dict | None:
@@ -63,7 +61,7 @@ def _build_camera_shader(cam):
     if lens is None:
         return
 
-    osl_source = codegen.build_camera_osl(_osl_template, lens, _lights)
+    osl_source = codegen.build_camera_osl(_osl_template, lens)
     text = _get_or_create_text_block(cam)
     text.clear()
     text.write(osl_source)
@@ -143,8 +141,6 @@ def _on_property_change(self, context):
 
 
 def _on_light_feature_toggle(self, context):
-    global _cached_light_key
-    _cached_light_key = None
     sync_to_cycles(self.id_data)
     if context.scene:
         _update_scene_lights(context.scene)
@@ -248,6 +244,8 @@ class CAMERA_OT_apply_physical_lens(bpy.types.Operator):
         _build_camera_shader(cam)
         lens = _get_lens(cam.physical_camera)
         _sync_focal_length(cam, lens)
+        # 無効化中はライトを追従させていないため、ゴースト/回折が ON のまま再有効化したときに最新のライトを渡す
+        _update_scene_lights(context.scene)
         return {"FINISHED"}
 
 
@@ -358,40 +356,45 @@ def _draw_object_context_menu(self, context):
         self.layout.operator("camera.disable_physical_lens")
 
 
-def _any_camera_needs_lights():
-    """Check if any physical lens camera has ghosts or diffraction enabled."""
-    for cam in bpy.data.cameras:
-        if _is_using_physical_lens(cam):
-            props = cam.physical_camera
-            if props.lens_ghosts or props.diffraction:
-                return True
-    return False
+def _camera_needs_lights(cam):
+    """Check if a physical lens camera has ghosts or diffraction enabled."""
+    if not _is_using_physical_lens(cam):
+        return False
+    props = cam.physical_camera
+    return props.lens_ghosts or props.diffraction
 
 
-def _lights_key(lights):
-    return tuple((lt["type"], lt["pos"], lt["dir"], lt["intensity"], lt["radius"]) for lt in lights)
+def _apply_scene_lights(cam, lights):
+    """Write lights to the camera's shader parameters. Returns True if they changed."""
+    try:
+        custom = cam.cycles_custom
+    except AttributeError:
+        return False
+
+    values = scene_lights.light_param_values(lights)
+    if not scene_lights.light_params_differ(custom, values):
+        return False
+    for name, value in values.items():
+        custom[name] = value
+    # ハンドラーから書き換えた IDProperty は依存グラフに通知されず、ビューポートのレンダリングに反映されないため
+    cam.update_tag()
+    return True
 
 
 def _update_scene_lights(scene):
-    """Collect lights from scene and rebuild shaders for all physical lens cameras."""
-    global _lights, _updating_lights, _cached_light_key
+    """Collect lights from scene and pass them to the cameras that use ghosts or diffraction."""
+    global _updating_lights
 
-    if _any_camera_needs_lights():
-        lights = scene_lights.collect_lights(scene)
-    else:
-        lights = []
-
-    key = _lights_key(lights)
-    if key == _cached_light_key:
+    # ゴースト/回折が OFF のカメラはライトを読まないため、パラメーターを書き換えて Cycles を再同期させない
+    cameras = [cam for cam in bpy.data.cameras if _camera_needs_lights(cam)]
+    if not cameras:
         return
-    _cached_light_key = key
-    _lights = lights
+    lights = scene_lights.collect_lights(scene)
 
     _updating_lights = True
     try:
-        for cam in bpy.data.cameras:
-            if _is_using_physical_lens(cam):
-                _build_camera_shader(cam)
+        for cam in cameras:
+            _apply_scene_lights(cam, lights)
     finally:
         _updating_lights = False
 
@@ -410,10 +413,6 @@ def _migrate_legacy_text_block(cam):
 @persistent
 def _on_load_post(_):
     """Rebuild shaders for all physical lens cameras after file load."""
-    global _cached_light_key, _lights
-    _cached_light_key = None
-    _lights = []
-
     # Migrate cameras from the old shared text datablock
     for cam in bpy.data.cameras:
         _migrate_legacy_text_block(cam)
@@ -427,18 +426,17 @@ def _on_load_post(_):
     if not has_any:
         return
 
-    if _any_camera_needs_lights():
-        _lights = scene_lights.collect_lights(bpy.context.scene)
-        _cached_light_key = _lights_key(_lights)
-
+    # 旧バージョンで保存したファイルはライトをソースに埋め込んだシェーダーのため、作り直してパラメーター方式へ移行する
     for cam in bpy.data.cameras:
         if _is_using_physical_lens(cam):
             _build_camera_shader(cam)
 
+    _update_scene_lights(bpy.context.scene)
+
 
 @persistent
 def _on_render_pre(_):
-    """Inject scene light positions into shaders before each frame."""
+    """Pass scene lights to the camera shader parameters before each frame."""
     _update_scene_lights(bpy.context.scene)
 
 

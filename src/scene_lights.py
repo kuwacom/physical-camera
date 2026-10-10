@@ -3,6 +3,8 @@
 Light positions and directions are stored in world space. The OSL shader
 transforms them to camera space at render time via transform("world",
 "camera", P), so camera movement does not trigger shader recompilation.
+The data is passed as camera shader parameters, so light changes do not
+trigger recompilation either.
 """
 
 MAX_LIGHTS = 16
@@ -145,38 +147,82 @@ def _luminance(color):
     return 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
 
 
-def generate_load_scene_lights(lights):
-    """Generate an OSL function body that loads scene light data."""
-    max3 = MAX_LIGHTS * 3
+# ライトはソースに埋め込まずカメラのシェーダーパラメーター (cam.cycles_custom) で渡す
+# ソースに埋め込むとライトを動かすたびに OSL の再コンパイルが走るため
+LIGHT_COUNT_PARAM = "scene_light_count"
+
+
+def light_param_names(index):
+    """Return the (geometry, info) shader parameter names for light slot ``index``."""
+    return f"scene_light_{index}", f"scene_light_{index}_info"
+
+
+def generate_scene_light_defines():
+    """Generate the light array size #defines shared by the shader functions."""
+    return "\n".join(
+        [
+            f"#define MAX_LIGHTS {MAX_LIGHTS}",
+            f"#define MAX_LIGHTS_3 {MAX_LIGHTS * 3}",
+        ]
+    )
+
+
+def generate_light_params():
+    """Generate the shader parameter declarations that carry scene lights."""
     lines = [
-        f"#define MAX_LIGHTS {MAX_LIGHTS}",
-        f"#define MAX_LIGHTS_3 {max3}",
-        "",
-        "void load_scene_lights(",
-        "    output int num_lights,",
-        "    output int light_types[MAX_LIGHTS],",
-        "    output float light_pos[MAX_LIGHTS_3],",
-        "    output float light_dir[MAX_LIGHTS_3],",
-        "    output float light_intensity[MAX_LIGHTS],",
-        "    output float light_radius[MAX_LIGHTS])",
-        "{",
-        f"    num_lights = {len(lights)};",
+        f"int {LIGHT_COUNT_PARAM} = 0",
+        '    [[ string description = "Set automatically by Physical Camera from the scene lights." ]],',
     ]
-
-    for i, lt in enumerate(lights):
-        lines.append(f"    light_types[{i}] = {lt['type']};")
-        lines.append(
-            f"    light_pos[{i * 3}] = {lt['pos'][0]};  "
-            f"light_pos[{i * 3 + 1}] = {lt['pos'][1]};  "
-            f"light_pos[{i * 3 + 2}] = {lt['pos'][2]};"
-        )
-        lines.append(
-            f"    light_dir[{i * 3}] = {lt['dir'][0]};  "
-            f"light_dir[{i * 3 + 1}] = {lt['dir'][1]};  "
-            f"light_dir[{i * 3 + 2}] = {lt['dir'][2]};"
-        )
-        lines.append(f"    light_intensity[{i}] = {lt['intensity']};")
-        lines.append(f"    light_radius[{i}] = {lt['radius']};")
-
-    lines.append("}")
+    for i in range(MAX_LIGHTS):
+        geom, info = light_param_names(i)
+        lines.append(f"vector {geom} = 0")
+        lines.append('    [[ string description = "World position (m), or toward-source direction for sun." ]],')
+        lines.append(f"vector {info} = 0")
+        lines.append('    [[ string description = "Type (0=positional, 1=sun), intensity, radius (mm)." ]],')
     return "\n".join(lines)
+
+
+def generate_load_scene_lights():
+    """Generate the shader-body statements that unpack the light parameters into arrays."""
+    lines = [f"num_lights = clamp({LIGHT_COUNT_PARAM}, 0, MAX_LIGHTS);"]
+    for i in range(MAX_LIGHTS):
+        geom, info = light_param_names(i)
+        lines.append(
+            f"unpack_scene_light({i}, {geom}, {info}, light_types, light_pos, light_dir, light_intensity, light_radius);"
+        )
+    return "\n".join(lines)
+
+
+def light_param_values(lights):
+    """Map collected lights to shader parameter values (unused slots are zero)."""
+    values = {LIGHT_COUNT_PARAM: min(len(lights), MAX_LIGHTS)}
+    for i in range(MAX_LIGHTS):
+        geom, info = light_param_names(i)
+        if i < len(lights):
+            lt = lights[i]
+            vec = lt["dir"] if lt["type"] == 1 else lt["pos"]
+            values[geom] = tuple(float(v) for v in vec)
+            values[info] = (float(lt["type"]), float(lt["intensity"]), float(lt["radius"]))
+        else:
+            values[geom] = (0.0, 0.0, 0.0)
+            values[info] = (0.0, 0.0, 0.0)
+    return values
+
+
+def light_params_differ(current, values):
+    """Return True if any value in ``values`` differs from the stored ``current`` mapping."""
+    from math import isclose
+
+    for name, value in values.items():
+        stored = current.get(name)
+        if stored is None:
+            return True
+        if isinstance(value, tuple):
+            # IDProperty の配列は単精度で丸められることがあるため、厳密比較だと毎回書き込みが発生する
+            if len(stored) != len(value):
+                return True
+            if any(not isclose(a, b, rel_tol=1e-6, abs_tol=1e-9) for a, b in zip(stored, value, strict=True)):
+                return True
+        elif stored != value:
+            return True
+    return False

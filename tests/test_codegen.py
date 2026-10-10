@@ -13,6 +13,8 @@ def template() -> str:
 def test_template_has_placeholders(template):
     assert "// {{LENS_DATA}}" in template
     assert "// {{SCENE_LIGHTS}}" in template
+    assert "// {{SCENE_LIGHT_PARAMS}}" in template
+    assert "// {{LOAD_SCENE_LIGHTS}}" in template
 
 
 def test_build_camera_osl_for_every_lens(template, bundled_lenses):
@@ -31,7 +33,7 @@ def test_build_camera_osl_for_every_lens(template, bundled_lenses):
         total_length = float(re.search(r"#define TOTAL_LENGTH_INF (\S+)", osl).group(1))
         assert total_length == pytest.approx(sum(s["thickness"] for s in lens["surfaces"][:-1]))
         assert "void load_lens_data(" in osl
-        assert "num_lights = 0;" in osl
+        assert "{{" not in osl
         # 全面ぶんの面データと型が出力されていること (欠けると OSL 側で 0 のまま追跡される)
         assert len(re.findall(r"^\s+radii\[\d+\]", osl, re.MULTILINE)) == n
         types = [int(v) for v in re.findall(r"surface_types\[\d+\] = (\d+);", osl)]
@@ -56,10 +58,3 @@ def test_focus_and_aspheric_data_are_emitted(template, bundled_lenses):
     assert "thicknesses_close[2] = 1.64;" in osl
     # 非球面の係数は extra[i * N_EXTRA + 1..] に入る
     assert f"extra[{7 * codegen.N_EXTRA + 1}] = -2.2875e-06;" in osl
-
-
-def test_scene_lights_are_emitted(template, bundled_lenses):
-    light = {"type": 1, "pos": (1.0, 2.0, 3.0), "dir": (0.0, 0.0, 1.0), "intensity": 10.0, "radius": 0.1}
-    osl = codegen.build_camera_osl(template, bundled_lenses[0], [light])
-    assert "num_lights = 1;" in osl
-    assert "light_pos[2] = 3.0;" in osl

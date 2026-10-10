@@ -18,6 +18,26 @@
 
 // {{SCENE_LIGHTS}}
 
+// 配列のシェーダーパラメーターは Cycles のカメラに渡らないため、ライト 1 灯を vector 2 つで受け取り配列へ展開する
+// geom: 点光源はワールド位置 (m)、サンは光源方向 (ワールド)。info: (種類, 強度, 半径 mm)
+void unpack_scene_light(
+    int li, vector geom, vector info,
+    output int light_types[MAX_LIGHTS],
+    output float light_pos[MAX_LIGHTS_3],
+    output float light_dir[MAX_LIGHTS_3],
+    output float light_intensity[MAX_LIGHTS],
+    output float light_radius[MAX_LIGHTS])
+{
+    int type = int(info[0]);
+    light_types[li] = type;
+    for (int k = 0; k < 3; k++) {
+        light_pos[li*3+k] = (type == 1) ? 0.0 : geom[k];
+        light_dir[li*3+k] = (type == 1) ? geom[k] : 0.0;
+    }
+    light_intensity[li] = info[1];
+    light_radius[li] = info[2];
+}
+
 // Transform world-space light data to lens space.
 // Blender's "camera" space has +Z toward the scene; lens space has -Z,
 // so Z is negated (matching the output conversion: position.z = -lens_z).
@@ -1665,6 +1685,7 @@ shader lens_camera(
         [[ string description = "Enable aperture diffraction (starburst spikes)." ]],
     float debug_mode = 0.0
         [[ string description = "0=normal, 1=pinhole, 2=diagnostic, 3=exit dir, 4=ghosts only, 5=ghost aim" ]],
+    // {{SCENE_LIGHT_PARAMS}}
     output point position = 0,
     output vector direction = 0,
     output color throughput = 1)
@@ -1918,8 +1939,7 @@ shader lens_camera(
     float light_intensity[MAX_LIGHTS];
     float light_radius[MAX_LIGHTS];
     if (trace_ghost || (diffraction && aperture_blades >= 3)) {
-        load_scene_lights(num_lights, light_types, light_pos, light_dir,
-                          light_intensity, light_radius);
+        // {{LOAD_SCENE_LIGHTS}}
         transform_lights_to_camera(num_lights, light_types, light_pos, light_dir);
     }
 

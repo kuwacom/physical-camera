@@ -1,9 +1,10 @@
 """Generate OSL shader source from template and lens prescriptions."""
 
+import re
 from pathlib import Path
 
 from .lenses import MAX_SURFACES, load_lenses, paraxial_back_focal_distance
-from .scene_lights import generate_load_scene_lights
+from .scene_lights import generate_light_params, generate_load_scene_lights, generate_scene_light_defines
 
 N_EXTRA = 8
 
@@ -121,14 +122,26 @@ def load_osl_template(template_path: Path, lens_dir: Path) -> tuple[str, list[di
     return template, lenses
 
 
-def build_camera_osl(template: str, lens: dict, lights=None) -> str:
+def _replace_placeholder(osl: str, name: str, block: str) -> str:
+    """Replace a ``// {{NAME}}`` line, indenting every block line like the placeholder."""
+    pattern = re.compile(rf"^([ \t]*)// \{{\{{{name}\}}\}}[ \t]*$", re.MULTILINE)
+    match = pattern.search(osl)
+    if match is None:
+        raise ValueError(f"Placeholder {{{{{name}}}}} not found in OSL template")
+    indent = match.group(1)
+    indented = "\n".join(f"{indent}{line}" if line else "" for line in block.split("\n"))
+    return osl[: match.start()] + indented + osl[match.end() :]
+
+
+def build_camera_osl(template: str, lens: dict) -> str:
     """Build final OSL source for a single camera.
 
-    Injects single-lens data into {{LENS_DATA}} and scene lights into
-    {{SCENE_LIGHTS}}.
+    Injects single-lens data into {{LENS_DATA}} and the scene light
+    parameter plumbing into {{SCENE_LIGHTS}} / {{SCENE_LIGHT_PARAMS}} /
+    {{LOAD_SCENE_LIGHTS}}. Light values themselves are shader parameters.
     """
-    lens_data_block = _generate_load_lens_data(lens)
-    lights_block = generate_load_scene_lights(lights or [])
-    osl = template.replace("// {{LENS_DATA}}", lens_data_block)
-    osl = osl.replace("// {{SCENE_LIGHTS}}", lights_block)
+    osl = _replace_placeholder(template, "LENS_DATA", _generate_load_lens_data(lens))
+    osl = _replace_placeholder(osl, "SCENE_LIGHTS", generate_scene_light_defines())
+    osl = _replace_placeholder(osl, "SCENE_LIGHT_PARAMS", generate_light_params())
+    osl = _replace_placeholder(osl, "LOAD_SCENE_LIGHTS", generate_load_scene_lights())
     return osl

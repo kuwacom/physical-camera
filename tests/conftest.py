@@ -21,6 +21,7 @@ if _PACKAGE not in sys.modules:
 
 lenses = importlib.import_module(f"{_PACKAGE}.lenses")
 codegen = importlib.import_module(f"{_PACKAGE}.codegen")
+scene_lights = importlib.import_module(f"{_PACKAGE}.scene_lights")
 
 
 @pytest.fixture(scope="session")
