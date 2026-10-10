@@ -16,6 +16,9 @@ from .lenses import aperture_scale, min_fstop
 
 _TEXT_BLOCK_PREFIX = "Physical Lens - "
 
+# oslc のコンパイルエラーをカメラ名で保持しパネルに表示する
+_compile_errors: dict[str, str] = {}
+
 _lens_registry: list[dict] = []
 _lens_items: list[tuple] = []
 _lens_map: dict[str, dict] = {}
@@ -86,10 +89,17 @@ def _build_camera_shader(cam, osl_source=None):
     sync_to_cycles(cam)
 
 
-def _report_shader_message(otype, message):
-    # コンパイルが成功するたびにコンソールへ出力されると他のログが埋まるため、問題が起きたときだけ表示する
-    if otype in {"ERROR", "WARNING"}:
+def _report_shader_message(cam):
+    def report(otype, message):
+        # コンパイルが成功するたびにコンソールへ出力されると他のログが埋まるため、問題が起きたときだけ表示する
+        if otype not in {"ERROR", "WARNING"}:
+            return
+        if otype == "ERROR":
+            # パネルに表示するため最新のエラーをカメラ名で保持する
+            _compile_errors[cam.name] = message
         print(f"Physical Camera: {message}")
+
+    return report
 
 
 def _compile_camera_shader(cam):
@@ -104,7 +114,9 @@ def _compile_camera_shader(cam):
     except ImportError:
         return
     if engine.with_osl():
-        osl.update_custom_camera_shader(cam, _report_shader_message)
+        # 前回のエラーが残ると今回の結果を反映できないためコンパイル前に消す
+        _compile_errors.pop(cam.name, None)
+        osl.update_custom_camera_shader(cam, _report_shader_message(cam))
 
 
 def sync_to_cycles(cam):
@@ -302,6 +314,61 @@ class CAMERA_OT_disable_physical_lens(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _cycles_device_warning(scene):
+    """Return a warning message when the Cycles device cannot run OSL camera shaders, or None."""
+    settings = getattr(scene, "cycles", None)
+    if settings is None:
+        return None
+    # CPU は OSL カメラを動かせるため警告しない
+    if getattr(settings, "device", "CPU") != "GPU":
+        return None
+    # compute_device_type の格納場所はバージョンで異なり得るため scene 側と preferences 側の両方を試し、取れないときは表示しない
+    compute_type = getattr(settings, "compute_device_type", None)
+    if not compute_type:
+        try:
+            compute_type = bpy.context.preferences.addons["cycles"].preferences.compute_device_type
+        except (KeyError, AttributeError):
+            return None
+    if not compute_type or compute_type == "OPTIX":
+        return None
+    return f"OSL camera shaders need CPU or OptiX (GPU compute device is {compute_type})"
+
+
+def _stored_light_count(cam):
+    """Number of scene lights currently passed to the camera's shader parameters."""
+    try:
+        return int(cam.cycles_custom.get(scene_lights.LIGHT_COUNT_PARAM, 0))
+    except AttributeError:
+        return 0
+
+
+def _draw_environment_warnings(layout, context, cam, props):
+    """Show warnings when the environment prevents the physical lens from rendering."""
+    scene = context.scene
+    if scene is None or scene.render.engine != "CYCLES":
+        layout.label(text="Enable the Cycles render engine", icon="ERROR")
+
+    device_warning = _cycles_device_warning(scene) if scene is not None else None
+    if device_warning is not None:
+        layout.label(text=device_warning, icon="ERROR")
+
+    error = _compile_errors.get(cam.name)
+    if error is not None:
+        # OSL のエラーメッセージは複数行になり得るため 1 行目だけ表示する
+        layout.label(text=f"Shader compile error: {error.splitlines()[0]}", icon="ERROR")
+
+    if props.lens_ghosts or props.diffraction:
+        count = _stored_light_count(cam)
+        if count == 0:
+            layout.label(text="No lights are visible to camera rays (0 passed to the shader)", icon="ERROR")
+            layout.label(
+                text="Enable Object Properties > Visibility > Ray Visibility > Camera on the lights",
+                icon="INFO",
+            )
+        else:
+            layout.label(text=f"Scene lights passed to the shader: {count}", icon="LIGHT")
+
+
 class CAMERA_PT_physical_lens(bpy.types.Panel):
     bl_label = "Physical Lens"
     bl_idname = "CAMERA_PT_physical_lens"
@@ -324,6 +391,8 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
             operator = layout.operator("camera.apply_physical_lens", icon="CAMERA_DATA")
             operator.enabled = editable
             return
+
+        _draw_environment_warnings(layout, context, cam, props)
 
         layout.use_property_split = True
         layout.use_property_decorate = False
@@ -599,6 +668,7 @@ def register():
 
 def unregister():
     diagram.cleanup()
+    _compile_errors.clear()
     bpy.app.handlers.frame_change_post.remove(_on_frame_change)
     bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph_update)
     bpy.app.handlers.render_pre.remove(_on_render_pre)
