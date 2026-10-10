@@ -2249,7 +2249,9 @@ shader lens_camera(
                 float tgt_cx[MAX_LIGHTS], tgt_cy[MAX_LIGHTS], tgt_r[MAX_LIGHTS];
                 float tgt_w[MAX_LIGHTS], tgt_total = 0.0;
                 int has_targets = 0;
-                if (num_lights > 0) {
+                // 射出光線が光軸に直交に近いと tan が発散し、ライト方向との差が桁落ちして照準先が壊れる
+                // 照準するかは射出光線だけで決まるため、照準不可として一様標本化のみにしても MIS の整合は保たれる
+                if (num_lights > 0 && exit_dir[2] < -1e-3) {
                     has_targets = diffraction_light_targets(
                         num_lights, light_types, light_pos, light_dir,
                         light_intensity, light_radius,
