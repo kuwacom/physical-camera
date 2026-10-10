@@ -226,20 +226,24 @@ int refract_at_flat_plane(
     return 1;
 }
 
+// 直接光の正規化 (戻り値) とゴーストの組重み (surface_R) は同じ垂直入射反射率を使うため、
+// 1 回の走査で両方を求めて coated_reflectance の呼び出しを光線あたり 1 面 1 回に抑える
 float onaxis_fresnel_transmission(
     int num_surfaces,
-    float radii[MAX_SURFACES],
     float iors[MAX_SURFACES],
     float lambda_nm,
-    float coating)
+    float coating,
+    output float surface_R[MAX_SURFACES])
 {
     float T = 1.0;
     for (int idx = num_surfaces - 1; idx >= 0; idx--) {
+        surface_R[idx] = 0.0;
         float n1 = iors[idx];
         float n2 = (idx > 0) ? iors[idx - 1] : 1.0;
         if (n1 == n2)
             continue;
         float R = coated_reflectance(n1, n2, 1.0, 1.0, lambda_nm, coating);
+        surface_R[idx] = R;
         T *= 1.0 - R;
     }
     return T;
@@ -315,10 +319,7 @@ void compute_exit_pupil(
     output float ep_z_x, output float ep_mag_x,
     output float ep_z_y, output float ep_mag_y)
 {
-    int stop_index = 0;
-    for (int i = 0; i < num_surfaces; i++) {
-        if (surface_types[i] == SURFACE_STOP) { stop_index = i; break; }
-    }
+    int stop_index = STOP_INDEX;
 
     // Build dual ABCD matrices for the rear subsystem (stop -> rear vertex).
     // Separate X and Y axes to handle cylindrical surfaces correctly.
@@ -377,15 +378,11 @@ void compute_field_exit_pupil(
     float sensor_x, float sensor_y, float sensor_z,
     float ep_z, float stop_z, float aim_semi_ap,
     int num_surfaces,
-    int surface_types[MAX_SURFACES],
     float thicknesses[MAX_SURFACES],
     float apertures[MAX_SURFACES],
     output float ep_cx, output float ep_cy, output float ep_r)
 {
-    int stop_index = 0;
-    for (int i = 0; i < num_surfaces; i++) {
-        if (surface_types[i] == SURFACE_STOP) { stop_index = i; break; }
-    }
+    int stop_index = STOP_INDEX;
 
     // Chief ray crossing: where a ray from the sensor through the stop center
     // hits the exit pupil plane
@@ -1023,16 +1020,17 @@ int reflect_at_surface(
 }
 
 // failure_type output: 0 = success, 1 = intersection miss, 2 = aperture clip, 3 = TIR
+// iors は波長補正済み (dispersed_iors)、vertex_z は呼び出し側で計算済みのものを受け取る
+// どちらも光線内で不変かつ射出瞳・ゴーストの計算と共有できるため、面ごとに cauchy_ior や頂点位置を求め直さない
 int trace_lens_system(
     point ray_origin,
     vector ray_dir,
     float aperture_scale,
     int num_surfaces,
     float radii[MAX_SURFACES],
-    float thicknesses[MAX_SURFACES],
+    float vertex_z[MAX_SURFACES],
     float iors[MAX_SURFACES],
     float apertures[MAX_SURFACES],
-    float abbe_v[MAX_SURFACES],
     int surface_types[MAX_SURFACES],
     float extra[MAX_EXTRA],
     float lambda_nm,
@@ -1048,18 +1046,6 @@ int trace_lens_system(
     surfaces_passed = 0;
     failure_type = 0;
     total_transmission = 1.0;
-
-    // Compute vertex z-positions (PBRT convention: front at most negative z,
-    // rear at z=0). This ensures sphere curvature pushes off-axis hits away
-    // from subsequent surfaces, preventing overshoot at thin air gaps.
-    float vertex_z[MAX_SURFACES];
-    float total_length = 0.0;
-    for (int i = 0; i < num_surfaces - 1; i++)
-        total_length += thicknesses[i];
-
-    vertex_z[0] = -total_length;
-    for (int i = 1; i < num_surfaces; i++)
-        vertex_z[i] = vertex_z[i - 1] + thicknesses[i - 1];
 
     point  p = ray_origin;
     vector d = ray_dir;
@@ -1102,8 +1088,8 @@ int trace_lens_system(
         // (toward sensor). When tracing sensor→scene at surface idx:
         // n1 = medium the ray is in (sensor side) = iors[idx]
         // n2 = medium the ray enters (scene side) = iors[idx-1] or air
-        float n1 = cauchy_ior(iors[idx], abbe_v[idx], lambda_nm);
-        float n2 = (idx > 0) ? cauchy_ior(iors[idx - 1], abbe_v[idx - 1], lambda_nm) : 1.0;
+        float n1 = iors[idx];
+        float n2 = (idx > 0) ? iors[idx - 1] : 1.0;
 
         if (surface_types[idx] == SURFACE_STOP) {
             n1 = 1.0;
@@ -1158,8 +1144,8 @@ int trace_lens_system(
             p = flat_p;
 
             if (surface_types[flat_idx] != SURFACE_STOP) {
-                float fn1 = cauchy_ior(iors[flat_idx], abbe_v[flat_idx], lambda_nm);
-                float fn2 = (flat_idx > 0) ? cauchy_ior(iors[flat_idx - 1], abbe_v[flat_idx - 1], lambda_nm) : 1.0;
+                float fn1 = iors[flat_idx];
+                float fn2 = (flat_idx > 0) ? iors[flat_idx - 1] : 1.0;
                 vector flat_d; float flat_trans;
                 if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, flat_d, flat_trans)) {
                     failure_type = 3;
@@ -1206,8 +1192,8 @@ int trace_lens_system(
             p = next_p;
 
             if (surface_types[next_idx] != SURFACE_STOP) {
-                float fn1 = cauchy_ior(iors[next_idx], abbe_v[next_idx], lambda_nm);
-                float fn2 = (next_idx > 0) ? cauchy_ior(iors[next_idx - 1], abbe_v[next_idx - 1], lambda_nm) : 1.0;
+                float fn1 = iors[next_idx];
+                float fn2 = (next_idx > 0) ? iors[next_idx - 1] : 1.0;
                 vector next_d; float next_trans;
                 if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, next_d, next_trans)) {
                     failure_type = 3;
@@ -1229,6 +1215,7 @@ int trace_lens_system(
 
 // Trace a contiguous range of surfaces [start_idx..end_idx] in the given direction.
 // Refracts at each surface except reflect_at_idx where it reflects instead.
+// iors は trace_lens_system と同じく波長補正済みのものを受け取る
 int trace_surface_range(
     int start_idx, int end_idx, int step, int reflect_at_idx,
     point p_in, vector d_in,
@@ -1237,7 +1224,6 @@ int trace_surface_range(
     float radii[MAX_SURFACES],
     float iors[MAX_SURFACES],
     float apertures[MAX_SURFACES],
-    float abbe_v[MAX_SURFACES],
     int surface_types[MAX_SURFACES],
     float extra[MAX_EXTRA],
     float vertex_z[MAX_SURFACES],
@@ -1260,11 +1246,11 @@ int trace_surface_range(
 
         float n1, n2;
         if (step < 0) {
-            n1 = cauchy_ior(iors[idx], abbe_v[idx], lambda_nm);
-            n2 = (idx > 0) ? cauchy_ior(iors[idx - 1], abbe_v[idx - 1], lambda_nm) : 1.0;
+            n1 = iors[idx];
+            n2 = (idx > 0) ? iors[idx - 1] : 1.0;
         } else {
-            n1 = (idx > 0) ? cauchy_ior(iors[idx - 1], abbe_v[idx - 1], lambda_nm) : 1.0;
-            n2 = cauchy_ior(iors[idx], abbe_v[idx], lambda_nm);
+            n1 = (idx > 0) ? iors[idx - 1] : 1.0;
+            n2 = iors[idx];
         }
         if (surface_types[idx] == SURFACE_STOP) {
             n1 = 1.0;
@@ -1320,7 +1306,6 @@ int trace_ghost_path(
     float radii[MAX_SURFACES],
     float iors[MAX_SURFACES],
     float apertures[MAX_SURFACES],
-    float abbe_v[MAX_SURFACES],
     int surface_types[MAX_SURFACES],
     float extra[MAX_EXTRA],
     float vertex_z[MAX_SURFACES],
@@ -1341,7 +1326,7 @@ int trace_ghost_path(
     if (!trace_surface_range(
             num_surfaces - 1, bounce_a, -1, bounce_a,
             p_out, d_out, aperture_scale, num_surfaces,
-            radii, iors, apertures, abbe_v, surface_types, extra, vertex_z,
+            radii, iors, apertures, surface_types, extra, vertex_z,
             lambda_nm, num_blades, blade_rotation, coating,
             p_out, d_out, phase_T))
         return 0;
@@ -1351,7 +1336,7 @@ int trace_ghost_path(
     if (!trace_surface_range(
             bounce_a + 1, bounce_b, 1, bounce_b,
             p_out, d_out, aperture_scale, num_surfaces,
-            radii, iors, apertures, abbe_v, surface_types, extra, vertex_z,
+            radii, iors, apertures, surface_types, extra, vertex_z,
             lambda_nm, num_blades, blade_rotation, coating,
             p_out, d_out, phase_T))
         return 0;
@@ -1362,7 +1347,7 @@ int trace_ghost_path(
         if (!trace_surface_range(
                 bounce_b - 1, 0, -1, -1,
                 p_out, d_out, aperture_scale, num_surfaces,
-                radii, iors, apertures, abbe_v, surface_types, extra, vertex_z,
+                radii, iors, apertures, surface_types, extra, vertex_z,
                 lambda_nm, num_blades, blade_rotation, coating,
                 p_out, d_out, phase_T))
             return 0;
@@ -1489,21 +1474,16 @@ shader lens_camera(
     // Anamorphic desqueeze: narrow sensor X sampling so the lens squeeze produces correct proportions
     sensor_x /= SQUEEZE;
 
-    int stop_index = 0;
-    for (int i = 0; i < num_surfaces; i++) {
-        if (surface_types[i] == SURFACE_STOP) { stop_index = i; break; }
-    }
+    int stop_index = STOP_INDEX;
 
     float focus_mm = focal_distance * 1000.0;
 
     // Interpolate variable thicknesses for current focus distance.
     // Uses linear interpolation in reciprocal object-distance space.
+    // ピント距離は cam:focal_distance で実行時に読む (アニメーション可) ため、補間以降はシェーダー内に残す
+    // 焼き込むとピント変更のたびに再コンパイルが必要になる
     if (FOCUS_CLOSE_DISTANCE > 0.0 && focus_mm > 0.0) {
-        float total_length_inf = 0.0;
-        for (int i = 0; i < num_surfaces - 1; i++)
-            total_length_inf += thicknesses[i];
-
-        float d_obj = focus_mm - total_length_inf;
+        float d_obj = focus_mm - TOTAL_LENGTH_INF;
         float alpha = (d_obj > 0.0)
             ? clamp(FOCUS_CLOSE_DISTANCE / d_obj, 0.0, 1.0)
             : 1.0;
@@ -1518,6 +1498,9 @@ shader lens_camera(
     float sensor_distance = compute_sensor_distance(
         num_surfaces, radii, thicknesses, iors, surface_types, total_length, focus_mm);
 
+    // Compute vertex z-positions (PBRT convention: front at most negative z,
+    // rear at z=0). This ensures sphere curvature pushes off-axis hits away
+    // from subsequent surfaces, preventing overshoot at thin air gaps.
     float vertex_z[MAX_SURFACES];
     vertex_z[0] = -total_length;
     for (int i = 1; i < num_surfaces; i++)
@@ -1545,7 +1528,8 @@ shader lens_camera(
     for (int i = 0; i < num_surfaces; i++)
         dispersed_iors[i] = cauchy_ior(iors[i], abbe_v[i], lambda);
 
-    float onaxis_T = onaxis_fresnel_transmission(num_surfaces, radii, dispersed_iors, lambda, coating);
+    float surface_R[MAX_SURFACES];
+    float onaxis_T = onaxis_fresnel_transmission(num_surfaces, dispersed_iors, lambda, coating, surface_R);
 
     // Lens layout: rear element at z=0, front element at z=-total_length.
     // Sensor is behind the rear element at z = +sensor_distance.
@@ -1553,9 +1537,8 @@ shader lens_camera(
     point sensor_point = point(sensor_x, sensor_y, sensor_z);
 
     // Compute the aperture stop's z-position
-    float stop_z = -total_length;
-    for (int i = 0; i < stop_index; i++)
-        stop_z += thicknesses[i];
+    // vertex_z と同じ順序の累積和なので、足し直さずそのまま使える
+    float stop_z = vertex_z[stop_index];
 
     // Sample on the exit pupil plane to reduce wasted rays for off-axis points.
     // The exit pupil is the image of the aperture stop as seen through the rear
@@ -1590,7 +1573,7 @@ shader lens_camera(
     float ep_cx = 0.0, ep_cy = 0.0, field_semi_ap = aim_semi_ap;
     compute_field_exit_pupil(sensor_x, sensor_y, sensor_z,
                              aim_z, stop_z, aim_semi_ap,
-                             num_surfaces, surface_types,
+                             num_surfaces,
                              thicknesses, apertures,
                              ep_cx, ep_cy, field_semi_ap);
 
@@ -1613,17 +1596,6 @@ shader lens_camera(
     }
 
     float blade_rot_rad = blade_rotation * M_PI / 180.0;
-
-    // Load scene lights once for both ghost aiming and diffraction
-    int num_lights = 0;
-    int light_types[MAX_LIGHTS];
-    float light_pos[MAX_LIGHTS_3];
-    float light_dir[MAX_LIGHTS_3];
-    float light_intensity[MAX_LIGHTS];
-    float light_radius[MAX_LIGHTS];
-    load_scene_lights(num_lights, light_types, light_pos, light_dir,
-                      light_intensity, light_radius);
-    transform_lights_to_camera(num_lights, light_types, light_pos, light_dir);
 
     float ax = 0.0;
     float ay = 0.0;
@@ -1667,25 +1639,23 @@ shader lens_camera(
 
     if (lens_ghosts) {
         // Normal-incidence Fresnel reflectance per surface (with coating)
-        float surface_R[MAX_SURFACES];
-        for (int i = 0; i < num_surfaces; i++) {
-            surface_R[i] = 0.0;
-            if (surface_types[i] == SURFACE_STOP) continue;
-            float n_sensor = dispersed_iors[i];
-            float n_scene = (i > 0) ? dispersed_iors[i - 1] : 1.0;
-            if (n_sensor == n_scene) continue;
-            surface_R[i] = coated_reflectance(n_sensor, n_scene, 1.0, 1.0, lambda, coating);
-        }
+        // onaxis_fresnel_transmission() で求めた値を再利用する。絞りは反射面にならないので除く
+        surface_R[stop_index] = 0.0;
 
         // Sum pair weights (R_a * R_b) for importance sampling CDF
-        for (int a = 0; a < num_surfaces; a++) {
-            if (surface_R[a] < 1e-10) continue;
-            for (int b = a + 1; b < num_surfaces; b++) {
-                if (surface_R[b] < 1e-10) continue;
-                ghost_total_weight += surface_R[a] * surface_R[b];
-                num_ghost_pairs++;
-            }
+        // Σ_{a<b} R_a R_b = Σ_a R_a * (後方の R の和) なので、接尾和で O(N) にする
+        // 波長依存 (分散・コーティング) のため焼き込めず、二重ループだと最大 630 組を光線ごとに走査することになる
+        float suffix_R[MAX_SURFACES];
+        float suffix_sum = 0.0;
+        int num_reflective = 0;
+        for (int i = num_surfaces - 1; i >= 0; i--) {
+            suffix_R[i] = suffix_sum;
+            if (surface_R[i] < 1e-10) continue;
+            suffix_sum += surface_R[i];
+            ghost_total_weight += surface_R[i] * suffix_R[i];
+            num_reflective++;
         }
+        num_ghost_pairs = num_reflective * (num_reflective - 1) / 2;
 
         if (num_ghost_pairs > 0 && ghost_total_weight > 0.0) {
             // Adaptive sample allocation: spend more on bright ghosts (uncoated),
@@ -1708,6 +1678,12 @@ shader lens_camera(
 
                 for (int a = 0; a < num_surfaces && ghost_a < 0; a++) {
                     if (surface_R[a] < 1e-10) continue;
+                    // 行 a の組をまとめて飛ばし、目標を含む行だけ b を走査する (CDF の順序は二重ループと同じ)
+                    float row_w = surface_R[a] * suffix_R[a];
+                    if (cumulative + row_w < target_w) {
+                        cumulative += row_w;
+                        continue;
+                    }
                     for (int b = a + 1; b < num_surfaces && ghost_a < 0; b++) {
                         if (surface_R[b] < 1e-10) continue;
                         cumulative += surface_R[a] * surface_R[b];
@@ -1723,6 +1699,21 @@ shader lens_camera(
                     trace_ghost = 0;
             }
         }
+    }
+
+    // Load scene lights once for both ghost aiming and diffraction
+    // ライトを使うのはゴースト光線と回折だけ。ワールド -> カメラ変換は光線ごとだと重いため、使う光線に限って読み込む
+    // (カメラ移動で再コンパイルしない設計なので、変換自体は焼き込めない)
+    int num_lights = 0;
+    int light_types[MAX_LIGHTS];
+    float light_pos[MAX_LIGHTS_3];
+    float light_dir[MAX_LIGHTS_3];
+    float light_intensity[MAX_LIGHTS];
+    float light_radius[MAX_LIGHTS];
+    if (trace_ghost || (diffraction && aperture_blades >= 3)) {
+        load_scene_lights(num_lights, light_types, light_pos, light_dir,
+                          light_intensity, light_radius);
+        transform_lights_to_camera(num_lights, light_types, light_pos, light_dir);
     }
 
     // Debug mode 4: ghosts only — kill direct rays
@@ -1886,7 +1877,7 @@ shader lens_camera(
         int ghost_ok = trace_ghost_path(
             ghost_a, ghost_b, sensor_point, ghost_initial_dir,
             aperture_scale, num_surfaces,
-            radii, iors, apertures, abbe_v, surface_types, extra, vertex_z,
+            radii, dispersed_iors, apertures, surface_types, extra, vertex_z,
             lambda, aperture_blades, blade_rot_rad, coating,
             ghost_exit, ghost_dir, ghost_T);
 
@@ -1932,8 +1923,8 @@ shader lens_camera(
 
     int ok = trace_lens_system(sensor_point, initial_dir, aperture_scale,
                                num_surfaces,
-                               radii, thicknesses, iors, apertures,
-                               abbe_v, surface_types, extra, lambda,
+                               radii, vertex_z, dispersed_iors, apertures,
+                               surface_types, extra, lambda,
                                aperture_blades, blade_rot_rad, coating,
                                exit_origin, exit_dir, surfaces_passed, failure_type,
                                total_transmission);

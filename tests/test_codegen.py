@@ -26,6 +26,10 @@ def test_build_camera_osl_for_every_lens(template, bundled_lenses):
         assert f"#define MAX_EXTRA {lenses.MAX_SURFACES * codegen.N_EXTRA}" in osl
         assert f"#define NUM_SURFACES {n}" in osl
         assert f"#define SQUEEZE {float(lens['squeeze'])}" in osl
+        # レンズだけで決まる値はシェーダーで光線ごとに求め直さず codegen が埋め込む
+        assert f"#define STOP_INDEX {lens['surface_types'].index('stop')}" in osl
+        total_length = float(re.search(r"#define TOTAL_LENGTH_INF (\S+)", osl).group(1))
+        assert total_length == pytest.approx(sum(s["thickness"] for s in lens["surfaces"][:-1]))
         assert "void load_lens_data(" in osl
         assert "num_lights = 0;" in osl
         # 全面ぶんの面データと型が出力されていること (欠けると OSL 側で 0 のまま追跡される)

@@ -70,6 +70,8 @@ def _generate_load_lens_data(lens: dict) -> str:
     coating_val = _COATING_VALUES[lens["coating"]]
     focus = lens.get("focus")
     close_dist = focus["close_distance"] if focus else 0.0
+    # 無限遠間隔での前面頂点 -> 後面頂点の距離。レンズだけで決まるのでシェーダーで光線ごとに足し直さない
+    total_length_inf = sum(s["thickness"] for s in lens["surfaces"][:-1])
 
     lines = [
         # 配列サイズは lenses.MAX_SURFACES を唯一の情報源とする
@@ -82,6 +84,8 @@ def _generate_load_lens_data(lens: dict) -> str:
         f"#define COATING {coating_val}",
         f"#define SQUEEZE {float(lens['squeeze'])}",
         f"#define FOCUS_CLOSE_DISTANCE {close_dist}",
+        f"#define STOP_INDEX {lens['stop_index']}",
+        f"#define TOTAL_LENGTH_INF {float(total_length_inf)!r}",
         # 合焦計算が解けないときの退避先 (無限遠ピントのセンサー位置)。シェーダー内では C≈0 で求められないため事前に計算する
         f"#define SENSOR_DISTANCE_INF {paraxial_back_focal_distance(lens['surfaces'], lens['surface_types'])!r}",
         "",
