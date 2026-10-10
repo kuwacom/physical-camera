@@ -156,6 +156,16 @@ def _on_property_change(self, context):
     sync_to_cycles(self.id_data)
 
 
+def _on_fstop_change(self, context):
+    lens = _get_lens(self)
+    if lens is not None:
+        limit = min_fstop(lens)
+        if self.fstop < limit:
+            # RNA に代入すると update が再帰するため IDProperty に直接書いて開放 F 値へ戻す
+            self["fstop"] = limit
+    sync_to_cycles(self.id_data)
+
+
 def _on_light_feature_toggle(self, context):
     sync_to_cycles(self.id_data)
     _update_camera_lights(self.id_data, context.scene)
@@ -174,7 +184,7 @@ class PhysicalCameraProperties(bpy.types.PropertyGroup):
         max=64.0,
         default=2.0,
         precision=1,
-        update=_on_property_change,
+        update=_on_fstop_change,
     )
     aperture_blades: IntProperty(
         name="Aperture Blades",
