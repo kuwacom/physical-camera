@@ -416,53 +416,131 @@ void compute_exit_pupil(
     }
 }
 
+// 円 (c1, r1) と円 (c2, r2) の共通部分を含む円で (c1, r1) を置き換える。共通部分が空なら r1 = 0
+// 標本化円盤は面積で重み付けするため、共通部分の内接円ではなく外接円にしないと通過できる光線を取りこぼして暗くなる
+void bound_disk_intersection(
+    output float c1x, output float c1y, output float r1,
+    float c2x, float c2y, float r2)
+{
+    float dx = c2x - c1x;
+    float dy = c2y - c1y;
+    float d = sqrt(dx * dx + dy * dy);
+    if (d >= r1 + r2) {
+        r1 = 0.0;
+        return;
+    }
+    if (d + r1 <= r2)
+        return;
+    if (d + r2 <= r1) {
+        c1x = c2x;  c1y = c2y;  r1 = r2;
+        return;
+    }
+    // 弦の中点から両方の弧の頂点までが半弦長以内なら、弦を直径とする円が共通部分 (レンズ形) を含む
+    float a = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+    float h = sqrt(max(r1 * r1 - a * a, 0.0));
+    if (r1 - a <= h && r2 - (d - a) <= h) {
+        c1x += dx / d * a;
+        c1y += dy / d * a;
+        r1 = h;
+    } else if (r2 < r1) {
+        // 片方の弧が半円を超えるときは、どちらの円も共通部分を含むので小さい方を使う
+        c1x = c2x;  c1y = c2y;  r1 = r2;
+    }
+}
+
+// sx / sy は射出瞳の楕円を半径 aim_semi_ap の円に写す倍率で、円の計算はこの正規化座標で行う
+// 戻り値の ep_cx / ep_cy は実座標、ep_r は正規化座標の半径。clipped は後群の制約で絞りの像より小さい円になったか
+// 円盤は通過領域を含む側 (外接) で取る。重みに円盤の面積を掛けるので、内側に切ると通過できる光線を落として暗くなる
 void compute_field_exit_pupil(
     float sensor_x, float sensor_y, float sensor_z,
-    float ep_z, float stop_z, float aim_semi_ap,
+    float ep_z, float stop_semi_ap, float aim_semi_ap, float sx, float sy,
     int num_surfaces,
+    float radii[MAX_SURFACES],
     float thicknesses[MAX_SURFACES],
+    float iors[MAX_SURFACES],
     float apertures[MAX_SURFACES],
-    output float ep_cx, output float ep_cy, output float ep_r)
+    int surface_types[MAX_SURFACES],
+    output float ep_cx, output float ep_cy, output float ep_r, output int clipped)
 {
     int stop_index = STOP_INDEX;
 
-    // Chief ray crossing: where a ray from the sensor through the stop center
-    // hits the exit pupil plane
-    float chief_t = (ep_z - sensor_z) / (stop_z - sensor_z);
-    ep_cx = sensor_x * (1.0 - chief_t);
-    ep_cy = sensor_y * (1.0 - chief_t);
-    ep_r = aim_semi_ap;
+    // 後群の制約を先に積み、最後に絞りの像と交わらせる。初期円は後群の制約に必ず含まれる大きさにする
+    float cx = 0.0, cy = 0.0;
+    ep_r = 1e10;
+    clipped = 0;
+    // 絞りの像は近軸では照準面の原点中心 (主光線は射出瞳中心を通る)。近軸追跡が退化したときの代わり
+    float stop_cx = 0.0, stop_cy = 0.0, stop_r = aim_semi_ap;
 
-    // Accumulate z from stop to each rear surface
-    float vz = stop_z;
-    for (int i = stop_index + 1; i < num_surfaces; i++) {
-        vz += thicknesses[i - 1];
+    // 後群の各面での光線高は (センサー位置, 照準点) の一次式なので、基底 2 本 (センサー 1 / 照準 0、センサー 0 / 照準 1) を
+    // 後面頂点から絞り側へ近軸追跡して係数を得る。直線で射影すると間の面の屈折を無視して制約円を誤る
+    // 後面頂点 z=0 から被写体側へ進む向きを正とした角度 u = -dy/dz を使う
+    float inv_dz = 1.0 / (ep_z - sensor_z);
+    float ya_x = ep_z * inv_dz, ua_x = inv_dz;
+    float yb_x = -sensor_z * inv_dz, ub_x = -inv_dz;
+    float ya_y = ya_x, ua_y = ua_x, yb_y = yb_x, ub_y = ub_x;
+
+    for (int i = num_surfaces - 1; i >= stop_index; i--) {
+        // 明るいレンズでは瞳の収差で実際の通過領域が近軸の射出瞳より広がるため、絞りにも後群と同じ余裕を付ける
+        if (i == stop_index) {
+            if (abs(yb_x) > 1e-10 && abs(yb_y) > 1e-10) {
+                stop_cx = -ya_x * sensor_x / yb_x * sx;
+                stop_cy = -ya_y * sensor_y / yb_y * sy;
+                stop_r = stop_semi_ap * max(sx / abs(yb_x), sy / abs(yb_y));
+            }
+            stop_r *= 1.1;
+            break;
+        }
+
         float semi_ap = apertures[i] * 0.5;
 
-        float t_i = (vz - sensor_z) / (ep_z - sensor_z);
-        if (abs(t_i) < 1e-10)
-            continue;
-
         // Constraint circle: projection of surface i's aperture onto the EP plane
-        float inv_t = 1.0 / t_i;
-        float cc_x = -sensor_x * (1.0 - t_i) * inv_t;
-        float cc_y = -sensor_y * (1.0 - t_i) * inv_t;
-        float cc_r = semi_ap * abs(inv_t);
+        // Safety margin: paraxial projection doesn't account for aberrations
+        if (abs(yb_x) > 1e-10 && abs(yb_y) > 1e-10) {
+            float cc_x = -ya_x * sensor_x / yb_x * sx;
+            float cc_y = -ya_y * sensor_y / yb_y * sy;
+            float cc_r = semi_ap * 1.1 * max(sx / abs(yb_x), sy / abs(yb_y));
+            bound_disk_intersection(cx, cy, ep_r, cc_x, cc_y, cc_r);
+            if (ep_r <= 0.0)
+                break;
+        }
 
-        // Largest disk centered at (ep_cx, ep_cy) fitting inside this constraint
-        float dx = ep_cx - cc_x;
-        float dy = ep_cy - cc_y;
-        float dist = sqrt(dx * dx + dy * dy);
-        float max_r = cc_r - dist;
+        float n1 = iors[i];
+        float n2 = iors[i - 1];
+        if (is_curved_surface(surface_types[i]) && n1 != n2) {
+            float k = (n2 - n1) / radii[i];
+            if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
+                ua_x = (n1 * ua_x + ya_x * k) / n2;
+                ub_x = (n1 * ub_x + yb_x * k) / n2;
+            } else {
+                ua_x *= n1 / n2;
+                ub_x *= n1 / n2;
+            }
+            if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
+                ua_y = (n1 * ua_y + ya_y * k) / n2;
+                ub_y = (n1 * ub_y + yb_y * k) / n2;
+            } else {
+                ua_y *= n1 / n2;
+                ub_y *= n1 / n2;
+            }
+        } else if (n1 != n2) {
+            ua_x *= n1 / n2;  ub_x *= n1 / n2;
+            ua_y *= n1 / n2;  ub_y *= n1 / n2;
+        }
 
-        if (max_r < ep_r)
-            ep_r = max_r;
+        float t = thicknesses[i - 1];
+        ya_x += ua_x * t;  yb_x += ub_x * t;
+        ya_y += ua_y * t;  yb_y += ub_y * t;
     }
 
-    // Safety margin: straight-line projection doesn't account for refraction
-    ep_r *= 1.1;
-    if (ep_r > aim_semi_ap)
-        ep_r = aim_semi_ap;
+    if (ep_r > 0.0) {
+        float rear_cx = cx, rear_cy = cy, rear_r = ep_r;
+        cx = stop_cx;  cy = stop_cy;  ep_r = stop_r;
+        bound_disk_intersection(cx, cy, ep_r, rear_cx, rear_cy, rear_r);
+        clipped = (cx != stop_cx || cy != stop_cy || ep_r != stop_r);
+    }
+
+    ep_cx = cx / sx;
+    ep_cy = cy / sy;
     if (ep_r < 0.0)
         ep_r = 0.0;
 }
@@ -1835,31 +1913,41 @@ shader lens_camera(
     }
     float aim_semi_ap = max(aim_semi_ap_x, aim_semi_ap_y);
 
+    // Scale field exit pupil separately for X and Y
+    // 楕円の射出瞳を半径 aim_semi_ap の円に写す倍率。円盤の計算はこの座標で行い、最後に軸ごとに戻す
+    float pupil_sx = 1.0, pupil_sy = 1.0;
+    // 割る側の aim_semi_ap_y を判定しないと、Y 側だけ 0 のとき ratio が発散する
+    if (aim_semi_ap_y > 1e-10) {
+        float ratio = aim_semi_ap_x / aim_semi_ap_y;
+        if (ratio > 1.0) {
+            pupil_sy = ratio;
+        } else if (ratio < 1.0) {
+            pupil_sx = 1.0 / ratio;
+        }
+    }
+
     float ep_cx = 0.0, ep_cy = 0.0, field_semi_ap = aim_semi_ap;
+    int field_clipped = 0;
     compute_field_exit_pupil(sensor_x, sensor_y, sensor_z,
-                             aim_z, stop_z, aim_semi_ap,
+                             aim_z, stop_semi_ap, aim_semi_ap, pupil_sx, pupil_sy,
                              num_surfaces,
-                             thicknesses, apertures,
-                             ep_cx, ep_cy, field_semi_ap);
+                             radii, thicknesses, dispersed_iors, apertures, surface_types,
+                             ep_cx, ep_cy, field_semi_ap, field_clipped);
 
     if (field_semi_ap <= 0.0) {
         throughput = 0.0;
         return;
     }
 
-    // Scale field exit pupil separately for X and Y
-    float field_semi_ap_x = field_semi_ap;
-    float field_semi_ap_y = field_semi_ap;
-    // 割る側の aim_semi_ap_y を判定しないと、Y 側だけ 0 のとき ratio が発散する
-    if (aim_semi_ap_y > 1e-10) {
-        float ratio = aim_semi_ap_x / aim_semi_ap_y;
-        if (ratio > 1.0) {
-            field_semi_ap_y = field_semi_ap / ratio;
-        } else if (ratio < 1.0) {
-            field_semi_ap_x = field_semi_ap * ratio;
-        }
-    }
+    // 下の n 角形は円に内接するため、後群で絞った円をそのまま使うと円と n 角形の隙間を通る光線を取りこぼす
+    // 絞りの像そのもの (n 角形の絞りに一致) でなければ、円を内接円に持つ n 角形まで広げて通過領域を含める
+    if (field_clipped && aperture_blades >= 3)
+        field_semi_ap /= cos(M_PI / float(aperture_blades));
 
+    float field_semi_ap_x = field_semi_ap / pupil_sx;
+    float field_semi_ap_y = field_semi_ap / pupil_sy;
+    float onaxis_area = max(aim_semi_ap_x * aim_semi_ap_y, 1e-20);
+    float sampling_area_ratio = (field_semi_ap_x * field_semi_ap_y) / onaxis_area;
     float blade_rot_rad = blade_rotation * M_PI / 180.0;
 
     float ax = 0.0;
@@ -2059,8 +2147,11 @@ shader lens_camera(
             float frac = (debug_view == 4) ? 1.0 : adaptive_frac;
             // Ghost rays sample a smaller disk than direct rays — scale by
             // the area ratio so ghosts contribute proportional étendue.
-            float area_ratio = (ghost_semi_ap * ghost_semi_ap)
-                             / (field_semi_ap_x * field_semi_ap_y);
+            // 直接光と同じく軸上の全射出瞳の面積を基準にする (画素ごとに絞った円盤で割ると周辺でゴーストが明るくなる)
+            // 直接光は外接半径 1 の n 角形 (面積 n/2·sin(2π/n)) で標本化するため、円で標本化するゴーストとは形の面積比も掛ける
+            int n_direct = (aperture_blades >= 3) ? aperture_blades : 128;
+            float ngon_area = 0.5 * float(n_direct) * sin(2.0 * M_PI / float(n_direct));
+            float area_ratio = (M_PI * ghost_semi_ap * ghost_semi_ap) / (ngon_area * onaxis_area);
             float w = weight * (ghost_T / onaxis_T)
                     * (ghost_total_weight / ghost_pair_weight) / frac * ghost_intensity
                     * pdf_factor * area_ratio;
@@ -2125,7 +2216,9 @@ shader lens_camera(
     if (ok) {
         float weight = cos4_falloff(initial_dir);
 
-        float w = weight * (total_transmission / onaxis_T);
+        // 周辺では後群の口径に合わせて円盤を絞って一様に標本化するため、推定量に円盤の面積を掛けないと後群による口径食が消える
+        // 軸上の全射出瞳の面積で割り、絞りを変えても露出が変わらない正規化は保つ
+        float w = weight * (total_transmission / onaxis_T) * sampling_area_ratio;
 
         // Compensate for fewer direct samples when ghosts are active
         if (lens_ghosts && num_ghost_pairs > 0)
