@@ -256,6 +256,7 @@ int refract_at_flat_plane(
 float onaxis_fresnel_transmission(
     int num_surfaces,
     float iors[MAX_SURFACES],
+    int surface_types[MAX_SURFACES],
     float lambda_nm,
     float coating,
     output float surface_R[MAX_SURFACES])
@@ -265,7 +266,9 @@ float onaxis_fresnel_transmission(
         surface_R[idx] = 0.0;
         float n1 = iors[idx];
         float n2 = (idx > 0) ? iors[idx - 1] : 1.0;
-        if (n1 == n2)
+        // 絞りは反射面にならないので除く
+        // 追跡でも絞りは屈折しないため、前後の媒質に関係なく型で判定して直接光の正規化とゴーストの組重みを揃える
+        if (n1 == n2 || surface_types[idx] == SURFACE_STOP)
             continue;
         float R = coated_reflectance(n1, n2, 1.0, 1.0, lambda_nm, coating);
         surface_R[idx] = R;
@@ -1855,7 +1858,8 @@ shader lens_camera(
         dispersed_iors[i] = cauchy_ior(iors[i], abbe_v[i], lambda);
 
     float surface_R[MAX_SURFACES];
-    float onaxis_T = onaxis_fresnel_transmission(num_surfaces, dispersed_iors, lambda, coating, surface_R);
+    float onaxis_T = onaxis_fresnel_transmission(num_surfaces, dispersed_iors, surface_types,
+                                                 lambda, coating, surface_R);
 
     // Lens layout: rear element at z=0, front element at z=-total_length.
     // Sensor is behind the rear element at z = +sensor_distance.
@@ -1975,9 +1979,7 @@ shader lens_camera(
 
     if (lens_ghosts) {
         // Normal-incidence Fresnel reflectance per surface (with coating)
-        // onaxis_fresnel_transmission() で求めた値を再利用する。絞りは反射面にならないので除く
-        surface_R[stop_index] = 0.0;
-
+        // onaxis_fresnel_transmission() で求めた値を再利用する (絞りはそこで 0 にしてある)
         float suffix_R[MAX_SURFACES];
         ghost_total_weight = ghost_pair_total_weight(num_surfaces, surface_R, suffix_R, num_ghost_pairs);
 
