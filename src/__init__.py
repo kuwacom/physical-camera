@@ -13,37 +13,52 @@ from bpy.props import (
 
 from . import codegen, diagram, scene_lights
 
-_TEXT_BLOCK_NAME = "Physical Lens OSL"
+_TEXT_BLOCK_PREFIX = "Physical Lens - "
 
 _lens_registry: list[dict] = []
 _lens_items: list[tuple] = []
-_lens_index_map: dict[str, int] = {}
-_osl_source: str = ""
-_osl_source_base: str = ""
+_lens_map: dict[str, dict] = {}
+_osl_template: str = ""
+_lights: list = []
 _updating_lights: bool = False
 _cached_light_key = None
 
 
-def _lens_index(props):
-    idx = _lens_index_map.get(props.lens)
-    if idx is not None:
-        return idx
-    if props.lens.isdigit():
-        i = int(props.lens)
-        if 0 <= i < len(_lens_registry):
-            return i
-    return 0
+def _get_lens(props) -> dict | None:
+    lens = _lens_map.get(props.lens)
+    if lens is not None:
+        return lens
+    if _lens_registry:
+        return _lens_registry[0]
+    return None
 
 
-def _get_or_create_text_block():
-    """Get or create the text datablock containing the generated OSL shader."""
-    if _TEXT_BLOCK_NAME in bpy.data.texts:
-        text = bpy.data.texts[_TEXT_BLOCK_NAME]
-    else:
-        text = bpy.data.texts.new(_TEXT_BLOCK_NAME)
+def _get_or_create_text_block(cam):
+    """Get or create a per-camera text datablock for the generated OSL shader."""
+    # Reuse existing text block if camera already has one with our prefix
+    if (cam.type == 'CUSTOM'
+            and cam.custom_shader is not None
+            and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)):
+        return cam.custom_shader
+
+    name = f"{_TEXT_BLOCK_PREFIX}{cam.name}"
+    if name in bpy.data.texts:
+        return bpy.data.texts[name]
+    return bpy.data.texts.new(name)
+
+
+def _build_camera_shader(cam):
+    """Generate and assign a single-lens shader for a camera."""
+    lens = _get_lens(cam.physical_camera)
+    if lens is None:
+        return
+
+    osl_source = codegen.build_camera_osl(_osl_template, lens, _lights)
+    text = _get_or_create_text_block(cam)
     text.clear()
-    text.write(_osl_source)
-    return text
+    text.write(osl_source)
+    cam.custom_shader = text
+    sync_to_cycles(cam)
 
 
 def sync_to_cycles(cam):
@@ -54,9 +69,8 @@ def sync_to_cycles(cam):
         return
 
     props = cam.physical_camera
-    lens_index = _lens_index(props)
+    lens = _get_lens(props)
 
-    custom["lens_type"] = lens_index
     custom["aperture_blades"] = props.aperture_blades
     from math import degrees
     custom["blade_rotation"] = degrees(props.blade_rotation)
@@ -68,28 +82,26 @@ def sync_to_cycles(cam):
     debug_map = {"NORMAL": 0.0, "PINHOLE": 1.0, "DIAGNOSTIC": 2.0, "EXIT_DIR": 3.0, "GHOSTS_ONLY": 4.0, "GHOST_AIM": 5.0}
     custom["debug_mode"] = debug_map[props.debug_mode]
 
-    if lens_index < len(_lens_registry):
-        max_fstop = _lens_registry[lens_index]["max_fstop"]
-        custom["aperture_scale"] = min(max_fstop / props.fstop, 1.0)
+    if lens is not None:
+        custom["aperture_scale"] = min(lens["max_fstop"] / props.fstop, 1.0)
     else:
         custom["aperture_scale"] = 1.0
 
 
-def _sync_focal_length(cam, lens_index):
-    if lens_index < len(_lens_registry):
-        cam.lens = _lens_registry[lens_index]["focal_length"]
+def _sync_focal_length(cam, lens):
+    if lens is not None:
+        cam.lens = lens["focal_length"]
 
 
 def _on_lens_change(self, context):
-    lens_index = _lens_index(self)
-    if lens_index < len(_lens_registry):
-        max_fstop = _lens_registry[lens_index]["max_fstop"]
-        if self.fstop < max_fstop:
-            self.fstop = max_fstop
+    lens = _get_lens(self)
+    if lens is not None:
+        if self.fstop < lens["max_fstop"]:
+            self.fstop = lens["max_fstop"]
     cam = context.object.data if context.object else None
     if cam:
-        _sync_focal_length(cam, lens_index)
-        sync_to_cycles(cam)
+        _sync_focal_length(cam, lens)
+        _build_camera_shader(cam)
 
 
 def _on_property_change(self, context):
@@ -185,7 +197,7 @@ def _is_using_physical_lens(cam):
         cam.type == 'CUSTOM'
         and cam.custom_mode == 'INTERNAL'
         and cam.custom_shader is not None
-        and cam.custom_shader.name == _TEXT_BLOCK_NAME
+        and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
     )
 
 
@@ -204,13 +216,11 @@ class CAMERA_OT_apply_physical_lens(bpy.types.Operator):
 
     def execute(self, context):
         cam = context.object.data
-        text = _get_or_create_text_block()
         cam.type = 'CUSTOM'
         cam.custom_mode = 'INTERNAL'
-        cam.custom_shader = text
-        lens_index = _lens_index(cam.physical_camera)
-        _sync_focal_length(cam, lens_index)
-        sync_to_cycles(cam)
+        _build_camera_shader(cam)
+        lens = _get_lens(cam.physical_camera)
+        _sync_focal_length(cam, lens)
         return {'FINISHED'}
 
 
@@ -262,11 +272,10 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
 
         layout.prop(props, "lens")
 
-        lens_index = _lens_index(props)
+        lens = _get_lens(props)
 
-        if lens_index < len(_lens_registry):
-            max_fstop = _lens_registry[lens_index]["max_fstop"]
-            layout.prop(props, "fstop", text=f"f-stop (min f/{max_fstop})")
+        if lens is not None:
+            layout.prop(props, "fstop", text=f"f-stop (min f/{lens['max_fstop']})")
         else:
             layout.prop(props, "fstop")
 
@@ -329,6 +338,16 @@ def _draw_object_context_menu(self, context):
         self.layout.operator("camera.disable_physical_lens")
 
 
+def _any_camera_needs_lights():
+    """Check if any physical lens camera has ghosts or diffraction enabled."""
+    for cam in bpy.data.cameras:
+        if _is_using_physical_lens(cam):
+            props = cam.physical_camera
+            if props.lens_ghosts or props.diffraction:
+                return True
+    return False
+
+
 def _lights_key(lights):
     return tuple(
         (lt['type'], lt['pos'], lt['dir'], lt['intensity'], lt['radius'])
@@ -337,47 +356,70 @@ def _lights_key(lights):
 
 
 def _update_scene_lights(scene):
-    """Collect lights from scene and regenerate the shader text block."""
-    global _osl_source, _updating_lights, _cached_light_key
-    cam_obj = scene.camera
-    if cam_obj is None or not _is_using_physical_lens(cam_obj.data):
-        lights = []
-    elif not (cam_obj.data.physical_camera.lens_ghosts
-              or cam_obj.data.physical_camera.diffraction):
-        lights = []
-    else:
+    """Collect lights from scene and rebuild shaders for all physical lens cameras."""
+    global _lights, _updating_lights, _cached_light_key
+
+    if _any_camera_needs_lights():
         lights = scene_lights.collect_lights(scene)
+    else:
+        lights = []
 
     key = _lights_key(lights)
     if key == _cached_light_key:
         return
     _cached_light_key = key
+    _lights = lights
 
-    _osl_source = codegen.inject_scene_lights(_osl_source_base, lights)
     _updating_lights = True
     try:
-        text = _get_or_create_text_block()
         for cam in bpy.data.cameras:
             if _is_using_physical_lens(cam):
-                cam.custom_shader = text
-                sync_to_cycles(cam)
+                _build_camera_shader(cam)
     finally:
         _updating_lights = False
 
 
+def _migrate_legacy_text_block(cam):
+    """Migrate cameras using the old shared text datablock name."""
+    if (cam.type == 'CUSTOM'
+            and cam.custom_mode == 'INTERNAL'
+            and cam.custom_shader is not None
+            and cam.custom_shader.name == "Physical Lens OSL"):
+        _build_camera_shader(cam)
+
+
 @persistent
 def _on_load_post(_):
-    """Update the shader text block and reassign to cameras after file load."""
-    global _cached_light_key
+    """Rebuild shaders for all physical lens cameras after file load."""
+    global _cached_light_key, _lights
     _cached_light_key = None
-    if _TEXT_BLOCK_NAME not in bpy.data.texts:
+    _lights = []
+
+    # Migrate cameras from the old shared text datablock
+    for cam in bpy.data.cameras:
+        _migrate_legacy_text_block(cam)
+
+    has_any = False
+    for cam in bpy.data.cameras:
+        if _is_using_physical_lens(cam):
+            has_any = True
+            break
+
+    if not has_any:
         return
-    _update_scene_lights(bpy.context.scene)
+
+    if _any_camera_needs_lights():
+        _lights = scene_lights.collect_lights(bpy.context.scene)
+        _cached_light_key = _lights_key(_lights)
+
+    for cam in bpy.data.cameras:
+        if _is_using_physical_lens(cam):
+            _build_camera_shader(cam)
 
 
 @persistent
 def _on_render_pre(_):
-    """Inject scene light positions into the shader before each frame."""
+    """Inject scene light positions into shaders before each frame."""
     _update_scene_lights(bpy.context.scene)
 
 
@@ -417,23 +459,18 @@ def _on_frame_change(scene, depsgraph):
 
 
 def register():
-    global _lens_registry, _lens_items, _lens_index_map, _osl_source
-    global _osl_source_base
+    global _lens_registry, _lens_items, _lens_map, _osl_template
 
     addon_dir = Path(__file__).parent
     template_path = addon_dir / "lens_camera.osl.template"
     lens_dir = addon_dir / "lenses"
 
-    osl_source_base, lenses = codegen.generate_osl(template_path, lens_dir)
-    _osl_source_base = osl_source_base
-    _osl_source = codegen.inject_scene_lights(_osl_source_base)
+    _osl_template, lenses = codegen.load_osl_template(template_path, lens_dir)
     _lens_registry = lenses
     _lens_items = [
         (lens["filename_stem"], lens["name"], "") for lens in lenses
     ]
-    _lens_index_map = {
-        lens["filename_stem"]: i for i, lens in enumerate(lenses)
-    }
+    _lens_map = {lens["filename_stem"]: lens for lens in lenses}
 
     PhysicalCameraProperties.__annotations__["lens"] = EnumProperty(
         name="Lens",

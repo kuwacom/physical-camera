@@ -26,16 +26,17 @@ Accuracy and realism take priority in design decisions. Features with significan
 
 ### OSL Shader (`src/lens_camera.osl.template`)
 
-- `// {{LENS_DATA}}` and `// {{SCENE_LIGHTS}}` placeholders are replaced with generated code at registration time and on depsgraph updates
+- `// {{LENS_DATA}}` and `// {{SCENE_LIGHTS}}` placeholders are replaced per camera with generated code (on lens selection, file load, and light changes)
+- Static defines (`MAX_SURFACES`, `N_EXTRA`, `MAX_EXTRA`, `SURFACE_*` types) live in the template
 - Backward ray tracing (sensor → scene) through a multi-surface lens system, using ABCD matrix optics for focus computation and exit pupil aiming
 - Surfaces are listed front-to-back but traced rear-to-front (sensor side first)
 - `MAX_SURFACES` is 36 — any new lens must fit within this limit
 
 ### Extension package (`src/`)
 
-- `__init__.py` — registers properties, operators, and the UI panel in Camera Properties. On register, calls `codegen.generate_osl()` and stores the result in a Blender text datablock
+- `__init__.py` — registers properties, operators, and the UI panel in Camera Properties. Each camera gets its own text datablock (`Physical Lens - {cam.name}`) holding a shader with only the selected lens. On register, loads the OSL template and lens registry; shaders are generated per camera on lens selection or file load
 - `lenses.py` — reads TOML lens files from `src/lenses/` into dicts (no bpy dependency, shared by the build script). Infers a `surface_types` list per lens (`"spherical"`, `"flat"`, `"stop"`, `"aspheric"`, `"cylindrical_x"`, `"cylindrical_y"`)
-- `codegen.py` — generates `load_lens_data()` and injects it into the OSL template: emits `surface_types[]`, `extra[]`, `thicknesses_close[]`, `focus_close_distance`, `squeeze`, and the `SURFACE_*` constants. Also injects `load_scene_lights()` via `inject_scene_lights()`
+- `codegen.py` — `load_osl_template()` loads the template and lens registry; `build_camera_osl()` injects one lens's data and the scene lights into the template. Emits per-lens `#define`s (`NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`) and a `load_lens_data()` that fills the per-surface arrays
 - `scene_lights.py` — collects LIGHT objects and emissive meshes in world space and generates `load_scene_lights()`. Positions are in world meters; sun directions are world-space "toward source" vectors. Up to `MAX_LIGHTS` (16), sorted by intensity. Camera-independent — camera movement does not recompile the shader
 - `diagram.py` — loads the PNGs in `src/previews/` as Blender preview icons; `src/lenses/*.toml` are the lens prescriptions (see below)
 
@@ -71,7 +72,7 @@ thickness_close = 0.89   # thickness at close_distance (infinity value lives in 
 
 ## Shader Function Pipeline
 
-1. `load_lens_data()` — generated at registration; outputs `surface_types[]` (`SURFACE_SPHERICAL=0`, `SURFACE_FLAT=1`, `SURFACE_STOP=2`, `SURFACE_ASPHERIC=3`, `SURFACE_CYLINDRICAL_X=4`, `SURFACE_CYLINDRICAL_Y=5`), `extra[]` (8 floats per surface: k, A4, A6, A8, A10, reserved×3), `thicknesses_close[]`, `focus_close_distance`, `squeeze`
+1. `load_lens_data()` — generated per camera with a single lens's data; outputs `surface_types[]` (`SURFACE_SPHERICAL=0`, `SURFACE_FLAT=1`, `SURFACE_STOP=2`, `SURFACE_ASPHERIC=3`, `SURFACE_CYLINDRICAL_X=4`, `SURFACE_CYLINDRICAL_Y=5`), `extra[]` (8 floats per surface: k, A4, A6, A8, A10, reserved×3; only non-zero entries emitted), `thicknesses_close[]`. Per-lens scalars are compile-time `#define`s: `NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`
 2. `load_scene_lights()` / `transform_lights_to_camera()` — world-space light data converted to camera space (mm) at render time via `transform("world", "camera", ...)`; the shader only regenerates when lights actually change
 3. `rng()` — Jenkins one-at-a-time hash deriving decorrelated uniform [0,1] variates from the two camera random samples (one per salt)
 4. Thickness interpolation — `alpha = clamp(close_distance / d_obj, 0, 1)` in reciprocal object-distance space
@@ -102,7 +103,7 @@ Throughput weighting applies cos^4 radiometric falloff and normalizes Fresnel lo
 - `iors[i]` is the medium *after* surface i (toward sensor), not before it
 - The stop clips rays but does not refract. All type branching uses `surface_types[]` constants — never check `radius == 0` or compare against a stop index. `is_curved_surface()` is true for SPHERICAL / ASPHERIC / CYLINDRICAL_X / CYLINDRICAL_Y (used for ABCD power and sphere-overlap logic)
 - `extra[i*N_EXTRA + 0..7]`: slots 0–4 are conic k, A4, A6, A8, A10; slots 5–7 reserved; non-aspheric surfaces are all zeros
-- Focusing uses variable element spacing when `focus_close_distance > 0`, otherwise unit focusing; the ABCD solve computes the correct sensor position for either case
+- Focusing uses variable element spacing when `FOCUS_CLOSE_DISTANCE > 0`, otherwise unit focusing; the ABCD solve computes the correct sensor position for either case
 - Fresnel transmission is tracked per-surface and normalized against on-axis transmission for exposure compensation
 - Coating reflectance uses the Airy thin-film interference formula (quarter-wave MgF₂, nc=1.38, design λ=550nm) with wavelength and angle dependence. Single coating returns the film reflectance directly; multicoating applies a power law (ratio³) clamped to bare Fresnel
 

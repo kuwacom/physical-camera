@@ -1,3 +1,22 @@
+#define MAX_SURFACES 36
+#define N_EXTRA 8
+// OSL array sizes must be integer literals: MAX_SURFACES * N_EXTRA
+#define MAX_EXTRA 288
+
+#define SURFACE_SPHERICAL     0
+#define SURFACE_FLAT          1
+#define SURFACE_STOP          2
+#define SURFACE_ASPHERIC      3
+#define SURFACE_CYLINDRICAL_X 4
+#define SURFACE_CYLINDRICAL_Y 5
+
+// extra[i*N_EXTRA + 0] = k (conic constant)
+// extra[i*N_EXTRA + 1] = A4 (4th-order aspheric coefficient)
+// extra[i*N_EXTRA + 2] = A6 (6th-order aspheric coefficient)
+// extra[i*N_EXTRA + 3] = A8 (8th-order aspheric coefficient)
+// extra[i*N_EXTRA + 4] = A10 (10th-order aspheric coefficient)
+// extra[i*N_EXTRA + 5..7] = reserved
+
 // {{LENS_DATA}}
 
 // {{SCENE_LIGHTS}}
@@ -1408,8 +1427,6 @@ float apply_diffraction(
 shader lens_camera(
     float aperture_scale = 1.0
         [[ string description = "Scale factor for the aperture stop opening. 1.0 = wide open." ]],
-    int lens_type = 0
-        [[ string description = "Lens selection index (see add-on UI for available lenses)." ]],
     int aperture_blades = 0
         [[ string description = "Number of aperture blades. 0 = circular." ]],
     float blade_rotation = 0.0
@@ -1465,16 +1482,14 @@ shader lens_camera(
     int surface_types[MAX_SURFACES];
     float extra[MAX_EXTRA];
     float thicknesses_close[MAX_SURFACES];
-    float focus_close_distance = 0.0;
-    int num_surfaces = 0;
-    float coating = 0.0;
-    float squeeze = 1.0;
-    load_lens_data(lens_type, radii, thicknesses, iors, apertures, abbe_v,
-                   surface_types, extra, thicknesses_close, focus_close_distance,
-                   num_surfaces, coating, squeeze);
+    load_lens_data(radii, thicknesses, iors, apertures, abbe_v,
+                   surface_types, extra, thicknesses_close);
+
+    int num_surfaces = NUM_SURFACES;
+    float coating = COATING;
 
     // Anamorphic desqueeze: narrow sensor X sampling so the lens squeeze produces correct proportions
-    sensor_x /= squeeze;
+    sensor_x /= SQUEEZE;
 
     int stop_index = 0;
     for (int i = 0; i < num_surfaces; i++) {
@@ -1485,14 +1500,14 @@ shader lens_camera(
 
     // Interpolate variable thicknesses for current focus distance.
     // Uses linear interpolation in reciprocal object-distance space.
-    if (focus_close_distance > 0.0 && focus_mm > 0.0) {
+    if (FOCUS_CLOSE_DISTANCE > 0.0 && focus_mm > 0.0) {
         float total_length_inf = 0.0;
         for (int i = 0; i < num_surfaces - 1; i++)
             total_length_inf += thicknesses[i];
 
         float d_obj = focus_mm - total_length_inf;
         float alpha = (d_obj > 0.0)
-            ? clamp(focus_close_distance / d_obj, 0.0, 1.0)
+            ? clamp(FOCUS_CLOSE_DISTANCE / d_obj, 0.0, 1.0)
             : 1.0;
 
         for (int i = 0; i < num_surfaces; i++)
