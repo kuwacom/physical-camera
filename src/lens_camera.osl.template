@@ -1998,16 +1998,25 @@ shader lens_camera(
         }
     }
 
+    // 回折で光条を出すかは乱数だけで決まる。ライトを照準に使うのは光条側の光線 (6 枚で約 7%) だけなので、読み込み前に判定する
+    int diffraction_spike = 0;
+    if (diffraction && aperture_blades >= 3) {
+        // spike_energy: fraction of PSF energy in diffraction spikes
+        float spike_energy = 0.5 * (1.0 - cos(M_PI / float(aperture_blades)));
+        diffraction_spike = (rng(rnd[0], rnd[1], 6) < spike_energy) ? 1 : 0;
+    }
+
     // Load scene lights once for both ghost aiming and diffraction
     // ライトを使うのはゴースト光線と回折だけ。ワールド -> カメラ変換は光線ごとだと重いため、使う光線に限って読み込む
     // (カメラ移動で再コンパイルしない設計なので、変換自体は焼き込めない)
+    // 読み込みはシェーダーパラメーターを参照するため関数に出せず、使う光線の判定を 1 か所にまとめて絞る
     int num_lights = 0;
     int light_types[MAX_LIGHTS];
     float light_pos[MAX_LIGHTS_3];
     float light_dir[MAX_LIGHTS_3];
     float light_intensity[MAX_LIGHTS];
     float light_radius[MAX_LIGHTS];
-    if (trace_ghost || (diffraction && aperture_blades >= 3)) {
+    if (trace_ghost || diffraction_spike) {
         // {{LOAD_SCENE_LIGHTS}}
         transform_lights_to_camera(num_lights, light_types, light_pos, light_dir);
     }
@@ -2229,14 +2238,10 @@ shader lens_camera(
             float theta0 = (lambda * 1e-6) / (stop_d * cos(M_PI / float(n)));
             float theta0_perp = (lambda * 1e-6) / (stop_d * sin(M_PI / float(n)));
 
-            float diff_h1 = rng(rnd[0], rnd[1], 6);
             float diff_h2 = rng(rnd[0], rnd[1], 7);
             float diff_h3 = rng(rnd[0], rnd[1], 8);
 
-            // spike_energy: fraction of PSF energy in diffraction spikes
-            float spike_energy = 0.5 * (1.0 - cos(M_PI / float(n)));
-
-            if (diff_h1 < spike_energy) {
+            if (diffraction_spike) {
                 // Exit ray angular components (relative to optical axis)
                 float exit_ax = exit_dir[0] / (-exit_dir[2]);
                 float exit_ay = exit_dir[1] / (-exit_dir[2]);

@@ -32,7 +32,7 @@ def test_every_light_slot_has_scalar_shader_params(osl):
     assert f"#define MAX_LIGHTS {scene_lights.MAX_LIGHTS}" in osl
     # 光線ごとのライト読み込みはゴースト/回折の分岐内に入ったまま (直接光線は読まない)
     load = osl.index(f"num_lights = clamp({scene_lights.LIGHT_COUNT_PARAM}, 0, MAX_LIGHTS);")
-    branch = osl.rindex("if (trace_ghost || (diffraction && aperture_blades >= 3)) {", 0, load)
+    branch = osl.rindex("if (trace_ghost || diffraction_spike) {", 0, load)
     assert osl.index("transform_lights_to_camera(num_lights", load) > load > branch
 
 
