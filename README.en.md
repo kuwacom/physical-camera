@@ -4,6 +4,8 @@
 
 A Blender extension that replaces Blender's built-in camera with a physically-based lens simulation. Rays are traced through real lens prescriptions to produce realistic depth of field, bokeh shapes, chromatic aberration, and vignetting.
 
+This project is a fork of [sidp/physical-camera](https://github.com/sidp/physical-camera) by Peter Simonsson.
+
 ## Features
 
 - Sequential ray tracing through multi-element lens designs

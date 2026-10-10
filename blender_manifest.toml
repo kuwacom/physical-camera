@@ -13,10 +13,7 @@ tags = ["Camera", "Render"]
 # OSL カメラは Blender 4.5 以降でしか使えないため、これを対応下限とする
 blender_version_min = "4.5.0"
 license = ["SPDX:GPL-3.0-or-later"]
-copyright = [
-  "2026 Peter Simonsson",
-  "2026 kuwacom",
-]
+copyright = ["2026 kuwacom"]
 
 [build]
 paths_exclude_pattern = [
