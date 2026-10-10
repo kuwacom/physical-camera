@@ -421,6 +421,9 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
         column.prop(props, "diffraction")
         column.prop(props, "debug_mode")
 
+        column.separator()
+        column.operator("camera.disable_physical_lens")
+
 
 class CAMERA_PT_physical_lens_diagram(bpy.types.Panel):
     bl_label = "Lens Diagram"
