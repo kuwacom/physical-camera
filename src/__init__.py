@@ -36,6 +36,16 @@ def _is_text_used_by_other_camera(text, cam):
     return any(c != cam and c.custom_shader == text for c in bpy.data.cameras)
 
 
+def _remove_orphan_text_blocks():
+    """Remove generated text datablocks that no camera references anymore."""
+    used = {cam.custom_shader for cam in bpy.data.cameras}
+    for text in list(bpy.data.texts):
+        # 生成テキストの接頭辞に一致する未参照のものだけを消し、ユーザーが手で作ったテキストを守る
+        if text.library is not None or not text.name.startswith(_TEXT_BLOCK_PREFIX) or text in used:
+            continue
+        bpy.data.texts.remove(text)
+
+
 def _get_or_create_text_block(cam):
     """Get or create a per-camera text datablock for the generated OSL shader."""
     # Reuse existing text block if camera already has one with our prefix
@@ -446,6 +456,9 @@ def _migrate_legacy_text_block(cam):
 @persistent
 def _on_load_post(_):
     """Rebuild shaders for all physical lens cameras after file load."""
+    # カメラ削除で参照されなくなったテキストブロックはファイルに保存され続けるため、読込時に掃除する
+    _remove_orphan_text_blocks()
+
     # Migrate cameras from the old shared text datablock
     for cam in bpy.data.cameras:
         _migrate_legacy_text_block(cam)
