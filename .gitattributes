@@ -1,0 +1,4 @@
+# ruff の line-ending = "lf" と揃え、Windows でもローカルの format チェックが通るようにする
+* text=auto eol=lf
+*.png binary
+*.blend binary
