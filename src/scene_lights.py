@@ -123,7 +123,8 @@ def _get_mesh_emission(obj):
 
     for slot in obj.material_slots:
         mat = slot.material
-        if mat is None or not mat.use_nodes:
+        # use_nodes は非推奨のため node_tree の有無で判定する (ノードを使わないマテリアルは node_tree が空)
+        if mat is None or mat.node_tree is None:
             continue
 
         for node in mat.node_tree.nodes:
