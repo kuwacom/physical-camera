@@ -1,4 +1,5 @@
 import re
+from types import SimpleNamespace
 
 import pytest
 from conftest import LENS_DIR, TEMPLATE_PATH, codegen, scene_lights
@@ -70,3 +71,41 @@ def test_light_params_differ():
     stored = dict(values)
     stored[scene_lights.LIGHT_COUNT_PARAM] = 0
     assert scene_lights.light_params_differ(stored, values)
+
+
+def _layer(name, objects, children=(), exclude=False, hide_render=False):
+    collection = SimpleNamespace(name=name, objects=objects, hide_render=hide_render)
+    return SimpleNamespace(collection=collection, children=list(children), exclude=exclude)
+
+
+def _obj(name, hide_render=False):
+    return SimpleNamespace(name_full=name, hide_render=hide_render)
+
+
+def test_render_objects_follow_view_layer_visibility():
+    shown, excluded, render_off = _obj("shown"), _obj("excluded"), _obj("render_off")
+    hidden_obj, unused_only = _obj("hidden_obj", hide_render=True), _obj("unused_only")
+    nested = _obj("nested")
+    used = SimpleNamespace(
+        use=True,
+        layer_collection=_layer(
+            "Scene",
+            [shown, hidden_obj],
+            [
+                _layer("excl", [excluded], exclude=True),
+                _layer("off", [render_off], hide_render=True),
+                _layer("parent", [], [_layer("child", [nested, shown])]),
+            ],
+        ),
+    )
+    unused = SimpleNamespace(use=False, layer_collection=_layer("Scene", [unused_only]))
+    scene = SimpleNamespace(view_layers=[used, unused])
+
+    names = sorted(obj.name_full for obj in scene_lights._render_objects(scene))
+    # 除外・レンダリング無効のコレクションやオブジェクト、レンダリングに使わないビューレイヤーのライトには照準しない
+    assert names == ["nested", "shown"]
+
+    # レンダリングに使うビューレイヤーが無いときは全ビューレイヤーを対象にする
+    used.use = False
+    names = sorted(obj.name_full for obj in scene_lights._render_objects(scene))
+    assert names == ["nested", "shown", "unused_only"]

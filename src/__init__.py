@@ -142,8 +142,7 @@ def _on_property_change(self, context):
 
 def _on_light_feature_toggle(self, context):
     sync_to_cycles(self.id_data)
-    if context.scene:
-        _update_scene_lights(context.scene)
+    _update_camera_lights(self.id_data, context.scene)
 
 
 class PhysicalCameraProperties(bpy.types.PropertyGroup):
@@ -245,7 +244,7 @@ class CAMERA_OT_apply_physical_lens(bpy.types.Operator):
         lens = _get_lens(cam.physical_camera)
         _sync_focal_length(cam, lens)
         # 無効化中はライトを追従させていないため、ゴースト/回折が ON のまま再有効化したときに最新のライトを渡す
-        _update_scene_lights(context.scene)
+        _update_camera_lights(cam, context.scene)
         return {"FINISHED"}
 
 
@@ -381,12 +380,40 @@ def _apply_scene_lights(cam, lights):
     return True
 
 
-def _update_scene_lights(scene):
-    """Collect lights from scene and pass them to the cameras that use ghosts or diffraction."""
+def _scene_cameras(scene):
+    """Camera datablocks used by a scene (its active camera and linked camera objects)."""
+    cameras = []
+    objects = list(scene.objects)
+    if scene.camera is not None:
+        objects.append(scene.camera)
+    for obj in objects:
+        if obj.type == "CAMERA" and obj.data not in cameras:
+            cameras.append(obj.data)
+    return cameras
+
+
+def _owner_scene(cam, preferred):
+    """Pick the scene whose lights a camera should use, preferring ``preferred`` if it uses the camera."""
+    if preferred is not None and cam in _scene_cameras(preferred):
+        return preferred
+    return next((scene for scene in bpy.data.scenes if cam in _scene_cameras(scene)), None)
+
+
+def _update_camera_lights(cam, preferred_scene):
+    scene = _owner_scene(cam, preferred_scene)
+    if scene is not None:
+        _update_scene_lights(scene, [cam])
+
+
+def _update_scene_lights(scene, cameras=None):
+    """Collect lights from scene and pass them to its cameras that use ghosts or diffraction."""
     global _updating_lights
 
+    # ライトはカメラデータごとに 1 組しか持てないため、そのカメラを使うシーンのライトだけを渡し別シーンのライトを混ぜない
     # ゴースト/回折が OFF のカメラはライトを読まないため、パラメーターを書き換えて Cycles を再同期させない
-    cameras = [cam for cam in bpy.data.cameras if _camera_needs_lights(cam)]
+    if cameras is None:
+        cameras = _scene_cameras(scene)
+    cameras = [cam for cam in cameras if _camera_needs_lights(cam)]
     if not cameras:
         return
     lights = scene_lights.collect_lights(scene)
@@ -431,13 +458,21 @@ def _on_load_post(_):
         if _is_using_physical_lens(cam):
             _build_camera_shader(cam)
 
-    _update_scene_lights(bpy.context.scene)
+    # 複数シーンで共有するカメラは開いているシーンのライトを最後に書いて優先する (レンダリング時は render_pre で対象シーンに合わせる)
+    current = bpy.context.scene
+    for scene in bpy.data.scenes:
+        if scene != current:
+            _update_scene_lights(scene)
+    if current is not None:
+        _update_scene_lights(current)
 
 
 @persistent
-def _on_render_pre(_):
-    """Pass scene lights to the camera shader parameters before each frame."""
-    _update_scene_lights(bpy.context.scene)
+def _on_render_pre(scene):
+    """Pass the rendered scene's lights to the camera shader parameters before each frame."""
+    # bpy.context.scene はレンダリング中のシーンとは限らない (別シーンのレンダリングやコマンドラインの -S) ため引数のシーンを使う
+    if scene is not None:
+        _update_scene_lights(scene)
 
 
 @persistent

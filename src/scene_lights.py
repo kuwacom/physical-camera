@@ -22,7 +22,7 @@ def collect_lights(scene):
     """
     lights = []
 
-    for obj in scene.objects:
+    for obj in _render_objects(scene):
         if obj.type == "LIGHT" and obj.visible_camera:
             _collect_light_object(obj, lights)
         elif obj.type == "MESH":
@@ -30,6 +30,24 @@ def collect_lights(scene):
 
     lights.sort(key=lambda light: light["intensity"], reverse=True)
     return lights[:MAX_LIGHTS]
+
+
+def _render_objects(scene):
+    """Objects rendered by the scene's view layers (excluded and render-disabled ones are skipped)."""
+    # scene.objects は除外したコレクションやレンダリング無効のオブジェクトも含み、写らないライトにゴーストを向けてしまうため
+    view_layers = [vl for vl in scene.view_layers if vl.use] or list(scene.view_layers)
+    found = {}
+    for view_layer in view_layers:
+        stack = [view_layer.layer_collection]
+        while stack:
+            layer_collection = stack.pop()
+            if layer_collection.exclude or layer_collection.collection.hide_render:
+                continue
+            for obj in layer_collection.collection.objects:
+                if not obj.hide_render:
+                    found.setdefault(obj.name_full, obj)
+            stack.extend(layer_collection.children)
+    return list(found.values())
 
 
 def _collect_light_object(obj, lights):
