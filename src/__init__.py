@@ -70,6 +70,12 @@ def _build_camera_shader(cam):
     sync_to_cycles(cam)
 
 
+def _report_shader_message(otype, message):
+    # コンパイルが成功するたびにコンソールへ出力されると他のログが埋まるため、問題が起きたときだけ表示する
+    if otype in {"ERROR", "WARNING"}:
+        print(f"Physical Camera: {message}")
+
+
 def _compile_camera_shader(cam):
     """Compile the camera shader to bytecode even when the scene engine is not Cycles."""
     # custom_shader 代入時の自動コンパイルはシーンのエンジンが Cycles のときしか走らず、
@@ -82,7 +88,7 @@ def _compile_camera_shader(cam):
     except ImportError:
         return
     if engine.with_osl():
-        osl.update_custom_camera_shader(cam, lambda _type, message: print(f"Physical Camera: {message}"))
+        osl.update_custom_camera_shader(cam, _report_shader_message)
 
 
 def sync_to_cycles(cam):
