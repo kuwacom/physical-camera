@@ -33,17 +33,24 @@ def _get_lens(props) -> dict | None:
     return None
 
 
+def _is_text_used_by_other_camera(text, cam):
+    return any(c != cam and c.custom_shader == text for c in bpy.data.cameras)
+
+
 def _get_or_create_text_block(cam):
     """Get or create a per-camera text datablock for the generated OSL shader."""
     # Reuse existing text block if camera already has one with our prefix
+    # 複製したカメラデータは元と同じテキストを参照しており、上書きすると元カメラのレンズまで変わるため共有中は再利用しない
     if (cam.type == 'CUSTOM'
             and cam.custom_shader is not None
-            and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)):
+            and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
+            and not _is_text_used_by_other_camera(cam.custom_shader, cam)):
         return cam.custom_shader
 
     name = f"{_TEXT_BLOCK_PREFIX}{cam.name}"
-    if name in bpy.data.texts:
-        return bpy.data.texts[name]
+    text = bpy.data.texts.get(name)
+    if text is not None and not _is_text_used_by_other_camera(text, cam):
+        return text
     return bpy.data.texts.new(name)
 
 
