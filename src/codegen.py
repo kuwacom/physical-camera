@@ -3,7 +3,14 @@
 import re
 from pathlib import Path
 
-from .lenses import MAX_SURFACES, load_lenses, paraxial_back_focal_distance, paraxial_entrance_pupil_magnification
+from .lenses import (
+    FOCUS_OFFSET_STEPS,
+    MAX_SURFACES,
+    focus_offset_table,
+    load_lenses,
+    paraxial_back_focal_distance,
+    paraxial_entrance_pupil_magnification,
+)
 from .scene_lights import generate_light_params, generate_load_scene_lights, generate_scene_light_defines
 
 N_EXTRA = 8
@@ -74,6 +81,8 @@ def _generate_load_lens_data(lens: dict) -> str:
     # 無限遠間隔での前面頂点 -> 後面頂点の距離。レンズだけで決まるのでシェーダーで光線ごとに足し直さない
     total_length_inf = sum(s["thickness"] for s in lens["surfaces"][:-1])
     surfaces, types = lens["surfaces"], lens["surface_types"]
+    offset_distance, offsets = focus_offset_table(lens)
+    offset_values = ", ".join(f"{v:.5f}" for v in offsets)
 
     lines = [
         # 配列サイズは lenses.MAX_SURFACES を唯一の情報源とする
@@ -93,6 +102,16 @@ def _generate_load_lens_data(lens: dict) -> str:
         # 回折角は被写体側から見た開口 (入射瞳) で決まるため、絞り径をこの倍率で入射瞳径に換算する
         f"#define ENTRANCE_PUPIL_MAG_X {paraxial_entrance_pupil_magnification(surfaces, types, 'x')!r}",
         f"#define ENTRANCE_PUPIL_MAG_Y {paraxial_entrance_pupil_magnification(surfaces, types, 'y')!r}",
+        # 近軸のセンサー位置と実光線の最良ピントのずれ (開放)。光線追跡が重いのでレンズごとに事前計算して表で持つ
+        f"#define FOCUS_OFFSET_DISTANCE {float(offset_distance)!r}",
+        "",
+        "float focus_offset(float alpha)",
+        "{",
+        f"    float table[{FOCUS_OFFSET_STEPS + 1}] = {{ {offset_values} }};",
+        f"    float x = clamp(alpha, 0.0, 1.0) * {float(FOCUS_OFFSET_STEPS)};",
+        f"    int i = min(int(x), {FOCUS_OFFSET_STEPS - 1});",
+        "    return mix(table[i], table[i + 1], x - float(i));",
+        "}",
         "",
         "void load_lens_data(",
         "    output float radii[MAX_SURFACES],",

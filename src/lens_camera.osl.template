@@ -1770,6 +1770,12 @@ shader lens_camera(
         total_length += thicknesses[i];
     float sensor_distance = compute_sensor_distance(
         num_surfaces, radii, thicknesses, iors, surface_types, total_length, focus_mm);
+    // 近軸の像面は開放の実光線の最良ピントからずれる (球面収差。内焦では前群間隔でも変わる) ため codegen の表で補正する
+    // α はピント間隔の補間と同じ逆数距離。絞るとずれが小さくなるのを開口比に比例させて近似する (全レンズで 2 乗や固定より誤差が小さかった)
+    float offset_d_obj = focus_mm - TOTAL_LENGTH_INF;
+    float offset_alpha = (focus_mm <= 0.0) ? 0.0
+        : ((offset_d_obj > 0.0) ? clamp(FOCUS_OFFSET_DISTANCE / offset_d_obj, 0.0, 1.0) : 1.0);
+    sensor_distance += focus_offset(offset_alpha) * aperture_scale;
 
     // Compute vertex z-positions (PBRT convention: front at most negative z,
     // rear at z=0). This ensures sphere curvature pushes off-axis hits away
