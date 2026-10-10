@@ -196,6 +196,16 @@ int point_in_ngon(float x, float y, float semi_ap, int num_blades, float rotatio
     return (r <= max_r) ? 1 : 0;
 }
 
+// 羽根の n 角形になるのは絞りだけで、他の面と羽根数 3 未満の絞りは円形開口。平面投影と曲面の交点で同じ判定を使う
+int inside_aperture(float x, float y, float semi_aperture,
+                    int surface_type, int num_blades, float blade_rotation)
+{
+    if (surface_type == SURFACE_STOP && num_blades >= 3)
+        return point_in_ngon(x, y, semi_aperture, num_blades, blade_rotation);
+    float r = sqrt(x * x + y * y);
+    return (r > semi_aperture) ? 0 : 1;
+}
+
 // Project ray to a z-plane and check circular or n-gon aperture.
 // Returns 1 if the ray passes, 0 if projection fails, -1 if clipped.
 // Sets out_p to the projected point on success.
@@ -212,14 +222,8 @@ int check_aperture_at_plane(
     float hx = p[0] + t * d[0];
     float hy = p[1] + t * d[1];
 
-    if (surface_type == SURFACE_STOP && num_blades >= 3) {
-        if (!point_in_ngon(hx, hy, semi_aperture, num_blades, blade_rotation))
-            return -1;
-    } else {
-        float r = sqrt(hx * hx + hy * hy);
-        if (r > semi_aperture)
-            return -1;
-    }
+    if (!inside_aperture(hx, hy, semi_aperture, surface_type, num_blades, blade_rotation))
+        return -1;
 
     out_p = point(hx, hy, plane_z);
     return 1;
@@ -875,20 +879,8 @@ int find_surface_intersection(
             return 0;
         hit_point = ray_origin + t * ray_dir;
 
-        if (surface_type == SURFACE_STOP) {
-            if (num_blades >= 3) {
-                if (!point_in_ngon(hit_point[0], hit_point[1], semi_aperture, num_blades, blade_rotation))
-                    return -1;
-            } else {
-                float r = sqrt(hit_point[0] * hit_point[0] + hit_point[1] * hit_point[1]);
-                if (r > semi_aperture)
-                    return -1;
-            }
-        } else {
-            float r = sqrt(hit_point[0] * hit_point[0] + hit_point[1] * hit_point[1]);
-            if (r > semi_aperture)
-                return -1;
-        }
+        if (!inside_aperture(hit_point[0], hit_point[1], semi_aperture, surface_type, num_blades, blade_rotation))
+            return -1;
 
         surface_normal = vector(0, 0, -1);
         return 1;
@@ -905,8 +897,7 @@ int find_surface_intersection(
             return 0;
     }
 
-    float r = sqrt(hit[0] * hit[0] + hit[1] * hit[1]);
-    if (r > semi_aperture)
+    if (!inside_aperture(hit[0], hit[1], semi_aperture, surface_type, num_blades, blade_rotation))
         return -1;
 
     vector N;
