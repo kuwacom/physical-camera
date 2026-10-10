@@ -527,6 +527,10 @@ def _on_depsgraph_update(scene, depsgraph):
     if _updating_lights:
         return
 
+    # ライトを必要とするカメラが無いシーンでは updates の走査が無駄になるため早期に抜ける
+    if not any(_camera_needs_lights(cam) for cam in _scene_cameras(scene)):
+        return
+
     needs_update = False
     for update in depsgraph.updates:
         uid = update.id
