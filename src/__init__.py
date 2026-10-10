@@ -41,10 +41,12 @@ def _get_or_create_text_block(cam):
     """Get or create a per-camera text datablock for the generated OSL shader."""
     # Reuse existing text block if camera already has one with our prefix
     # 複製したカメラデータは元と同じテキストを参照しており、上書きすると元カメラのレンズまで変わるため共有中は再利用しない
-    if (cam.type == 'CUSTOM'
-            and cam.custom_shader is not None
-            and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
-            and not _is_text_used_by_other_camera(cam.custom_shader, cam)):
+    if (
+        cam.type == "CUSTOM"
+        and cam.custom_shader is not None
+        and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
+        and not _is_text_used_by_other_camera(cam.custom_shader, cam)
+    ):
         return cam.custom_shader
 
     name = f"{_TEXT_BLOCK_PREFIX}{cam.name}"
@@ -80,13 +82,21 @@ def sync_to_cycles(cam):
 
     custom["aperture_blades"] = props.aperture_blades
     from math import degrees
+
     custom["blade_rotation"] = degrees(props.blade_rotation)
     custom["chromatic_aberration"] = 1 if props.chromatic_aberration else 0
     custom["lens_ghosts"] = 1 if props.lens_ghosts else 0
     custom["ghost_intensity"] = props.ghost_intensity
     custom["diffraction"] = 1 if props.diffraction else 0
 
-    debug_map = {"NORMAL": 0.0, "PINHOLE": 1.0, "DIAGNOSTIC": 2.0, "EXIT_DIR": 3.0, "GHOSTS_ONLY": 4.0, "GHOST_AIM": 5.0}
+    debug_map = {
+        "NORMAL": 0.0,
+        "PINHOLE": 1.0,
+        "DIAGNOSTIC": 2.0,
+        "EXIT_DIR": 3.0,
+        "GHOSTS_ONLY": 4.0,
+        "GHOST_AIM": 5.0,
+    }
     custom["debug_mode"] = debug_map[props.debug_mode]
 
     if lens is not None:
@@ -152,7 +162,7 @@ class PhysicalCameraProperties(bpy.types.PropertyGroup):
     )
     blade_rotation: FloatProperty(
         name="Blade Rotation",
-        subtype='ANGLE',
+        subtype="ANGLE",
         min=0.0,
         max=6.2831853,
         default=0.0,
@@ -201,8 +211,8 @@ class PhysicalCameraProperties(bpy.types.PropertyGroup):
 
 def _is_using_physical_lens(cam):
     return (
-        cam.type == 'CUSTOM'
-        and cam.custom_mode == 'INTERNAL'
+        cam.type == "CUSTOM"
+        and cam.custom_mode == "INTERNAL"
         and cam.custom_shader is not None
         and cam.custom_shader.name.startswith(_TEXT_BLOCK_PREFIX)
     )
@@ -212,58 +222,52 @@ class CAMERA_OT_apply_physical_lens(bpy.types.Operator):
     bl_idname = "camera.apply_physical_lens"
     bl_label = "Enable Physical Lens"
     bl_description = "Set this camera to use the physical lens shader"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return (
-            context.object is not None
-            and context.object.type == 'CAMERA'
-        )
+        return context.object is not None and context.object.type == "CAMERA"
 
     def execute(self, context):
         cam = context.object.data
-        cam.type = 'CUSTOM'
-        cam.custom_mode = 'INTERNAL'
+        cam.type = "CUSTOM"
+        cam.custom_mode = "INTERNAL"
         _build_camera_shader(cam)
         lens = _get_lens(cam.physical_camera)
         _sync_focal_length(cam, lens)
-        return {'FINISHED'}
+        return {"FINISHED"}
 
 
 class CAMERA_OT_disable_physical_lens(bpy.types.Operator):
     bl_idname = "camera.disable_physical_lens"
     bl_label = "Disable Physical Lens"
     bl_description = "Revert to a standard perspective camera"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         return (
             context.object is not None
-            and context.object.type == 'CAMERA'
+            and context.object.type == "CAMERA"
             and _is_using_physical_lens(context.object.data)
         )
 
     def execute(self, context):
         cam = context.object.data
-        cam.type = 'PERSP'
-        return {'FINISHED'}
+        cam.type = "PERSP"
+        return {"FINISHED"}
 
 
 class CAMERA_PT_physical_lens(bpy.types.Panel):
     bl_label = "Physical Lens"
     bl_idname = "CAMERA_PT_physical_lens"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
     bl_context = "data"
 
     @classmethod
     def poll(cls, context):
-        return (
-            context.object is not None
-            and context.object.type == 'CAMERA'
-        )
+        return context.object is not None and context.object.type == "CAMERA"
 
     def draw(self, context):
         layout = self.layout
@@ -271,7 +275,7 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
         props = cam.physical_camera
 
         if not _is_using_physical_lens(cam):
-            layout.operator("camera.apply_physical_lens", icon='CAMERA_DATA')
+            layout.operator("camera.apply_physical_lens", icon="CAMERA_DATA")
             return
 
         layout.use_property_split = True
@@ -302,17 +306,17 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
 class CAMERA_PT_physical_lens_diagram(bpy.types.Panel):
     bl_label = "Lens Diagram"
     bl_idname = "CAMERA_PT_physical_lens_diagram"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
     bl_context = "data"
     bl_parent_id = "CAMERA_PT_physical_lens"
-    bl_options = {'DEFAULT_CLOSED'}
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
         return (
             context.object is not None
-            and context.object.type == 'CAMERA'
+            and context.object.type == "CAMERA"
             and _is_using_physical_lens(context.object.data)
             and diagram.has_previews()
         )
@@ -322,7 +326,7 @@ class CAMERA_PT_physical_lens_diagram(bpy.types.Panel):
         icon_id = diagram.get_icon_id(props.lens)
         if icon_id:
             row = self.layout.row()
-            row.alignment = 'CENTER'
+            row.alignment = "CENTER"
             row.template_icon(icon_value=icon_id, scale=8.0)
 
 
@@ -336,11 +340,7 @@ _classes = (
 
 
 def _draw_object_context_menu(self, context):
-    if (
-        context.object is not None
-        and context.object.type == 'CAMERA'
-        and _is_using_physical_lens(context.object.data)
-    ):
+    if context.object is not None and context.object.type == "CAMERA" and _is_using_physical_lens(context.object.data):
         self.layout.separator()
         self.layout.operator("camera.disable_physical_lens")
 
@@ -356,10 +356,7 @@ def _any_camera_needs_lights():
 
 
 def _lights_key(lights):
-    return tuple(
-        (lt['type'], lt['pos'], lt['dir'], lt['intensity'], lt['radius'])
-        for lt in lights
-    )
+    return tuple((lt["type"], lt["pos"], lt["dir"], lt["intensity"], lt["radius"]) for lt in lights)
 
 
 def _update_scene_lights(scene):
@@ -388,10 +385,12 @@ def _update_scene_lights(scene):
 
 def _migrate_legacy_text_block(cam):
     """Migrate cameras using the old shared text datablock name."""
-    if (cam.type == 'CUSTOM'
-            and cam.custom_mode == 'INTERNAL'
-            and cam.custom_shader is not None
-            and cam.custom_shader.name == "Physical Lens OSL"):
+    if (
+        cam.type == "CUSTOM"
+        and cam.custom_mode == "INTERNAL"
+        and cam.custom_shader is not None
+        and cam.custom_shader.name == "Physical Lens OSL"
+    ):
         _build_camera_shader(cam)
 
 
@@ -440,12 +439,10 @@ def _on_depsgraph_update(scene, depsgraph):
     for update in depsgraph.updates:
         uid = update.id
         if isinstance(uid, bpy.types.Object):
-            if uid.type == 'LIGHT' and (update.is_updated_transform
-                                        or update.is_updated_shading):
+            if uid.type == "LIGHT" and (update.is_updated_transform or update.is_updated_shading):
                 needs_update = True
                 break
-            if uid.type == 'MESH' and (update.is_updated_transform
-                                       or update.is_updated_shading):
+            if uid.type == "MESH" and (update.is_updated_transform or update.is_updated_shading):
                 needs_update = True
                 break
         elif isinstance(uid, bpy.types.Light):
@@ -474,9 +471,7 @@ def register():
 
     _osl_template, lenses = codegen.load_osl_template(template_path, lens_dir)
     _lens_registry = lenses
-    _lens_items = [
-        (lens["filename_stem"], lens["name"], "") for lens in lenses
-    ]
+    _lens_items = [(lens["filename_stem"], lens["name"], "") for lens in lenses]
     _lens_map = {lens["filename_stem"]: lens for lens in lenses}
 
     PhysicalCameraProperties.__annotations__["lens"] = EnumProperty(
@@ -490,9 +485,7 @@ def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
 
-    bpy.types.Camera.physical_camera = bpy.props.PointerProperty(
-        type=PhysicalCameraProperties
-    )
+    bpy.types.Camera.physical_camera = bpy.props.PointerProperty(type=PhysicalCameraProperties)
     bpy.types.OUTLINER_MT_object.append(_draw_object_context_menu)
     bpy.app.handlers.load_post.append(_on_load_post)
     bpy.app.handlers.render_pre.append(_on_render_pre)

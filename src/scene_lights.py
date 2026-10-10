@@ -21,44 +21,49 @@ def collect_lights(scene):
     lights = []
 
     for obj in scene.objects:
-        if obj.type == 'LIGHT' and obj.visible_camera:
+        if obj.type == "LIGHT" and obj.visible_camera:
             _collect_light_object(obj, lights)
-        elif obj.type == 'MESH':
+        elif obj.type == "MESH":
             _collect_emissive_mesh(obj, lights)
 
-    lights.sort(key=lambda l: l["intensity"], reverse=True)
+    lights.sort(key=lambda light: light["intensity"], reverse=True)
     return lights[:MAX_LIGHTS]
 
 
 def _collect_light_object(obj, lights):
     light = obj.data
 
-    if light.type == 'SUN':
+    if light.type == "SUN":
         from mathutils import Vector
+
         emission_dir = obj.matrix_world.to_3x3() @ Vector((0, 0, -1))
         # Negate to get "toward source" direction.
         # Stored in world space; the shader transforms to camera space.
-        lights.append({
-            "type": 1,
-            "pos": (0.0, 0.0, 0.0),
-            "dir": (-emission_dir.x, -emission_dir.y, -emission_dir.z),
-            "intensity": light.energy * _luminance(light.color),
-            "radius": 0.0,
-        })
+        lights.append(
+            {
+                "type": 1,
+                "pos": (0.0, 0.0, 0.0),
+                "dir": (-emission_dir.x, -emission_dir.y, -emission_dir.z),
+                "intensity": light.energy * _luminance(light.color),
+                "radius": 0.0,
+            }
+        )
     else:
         # POINT, SPOT, AREA — world-space position in meters
         pos = obj.matrix_world.translation
-        if light.type == 'AREA':
-            radius = max(light.size, getattr(light, 'size_y', light.size)) * 1000
+        if light.type == "AREA":
+            radius = max(light.size, getattr(light, "size_y", light.size)) * 1000
         else:
             radius = light.shadow_soft_size * 1000
-        lights.append({
-            "type": 0,
-            "pos": (pos.x, pos.y, pos.z),
-            "dir": (0.0, 0.0, 0.0),
-            "intensity": light.energy * _luminance(light.color),
-            "radius": radius,
-        })
+        lights.append(
+            {
+                "type": 0,
+                "pos": (pos.x, pos.y, pos.z),
+                "dir": (0.0, 0.0, 0.0),
+                "intensity": light.energy * _luminance(light.color),
+                "radius": radius,
+            }
+        )
 
 
 def _collect_emissive_mesh(obj, lights):
@@ -76,13 +81,15 @@ def _collect_emissive_mesh(obj, lights):
     dims = obj.dimensions
     radius = max(dims.x, dims.y, dims.z) * 0.5 * 1000
 
-    lights.append({
-        "type": 0,
-        "pos": (pos.x, pos.y, pos.z),
-        "dir": (0.0, 0.0, 0.0),
-        "intensity": intensity,
-        "radius": radius,
-    })
+    lights.append(
+        {
+            "type": 0,
+            "pos": (pos.x, pos.y, pos.z),
+            "dir": (0.0, 0.0, 0.0),
+            "intensity": intensity,
+            "radius": radius,
+        }
+    )
 
 
 def _get_mesh_emission(obj):
@@ -103,17 +110,15 @@ def _get_mesh_emission(obj):
             strength = 0.0
             color = (1.0, 1.0, 1.0)
 
-            if node.type == 'EMISSION':
-                color = _socket_default(node.inputs['Color'], (1.0, 1.0, 1.0))
-                strength = _socket_default(node.inputs['Strength'], 1.0)
+            if node.type == "EMISSION":
+                color = _socket_default(node.inputs["Color"], (1.0, 1.0, 1.0))
+                strength = _socket_default(node.inputs["Strength"], 1.0)
 
-            elif node.type == 'BSDF_PRINCIPLED':
-                strength = _socket_default(
-                    node.inputs.get('Emission Strength'), 0.0)
+            elif node.type == "BSDF_PRINCIPLED":
+                strength = _socket_default(node.inputs.get("Emission Strength"), 0.0)
                 if strength <= 0.0:
                     continue
-                color = _socket_default(
-                    node.inputs.get('Emission Color'), (1.0, 1.0, 1.0))
+                color = _socket_default(node.inputs.get("Emission Color"), (1.0, 1.0, 1.0))
 
             else:
                 continue
@@ -131,8 +136,8 @@ def _socket_default(socket, fallback):
     if socket is None:
         return fallback
     val = socket.default_value
-    if hasattr(val, '__len__'):
-        return tuple(val)[:len(fallback)] if hasattr(fallback, '__len__') else val
+    if hasattr(val, "__len__"):
+        return tuple(val)[: len(fallback)] if hasattr(fallback, "__len__") else val
     return float(val)
 
 
@@ -161,14 +166,14 @@ def generate_load_scene_lights(lights):
     for i, lt in enumerate(lights):
         lines.append(f"    light_types[{i}] = {lt['type']};")
         lines.append(
-            f"    light_pos[{i*3}] = {lt['pos'][0]};  "
-            f"light_pos[{i*3+1}] = {lt['pos'][1]};  "
-            f"light_pos[{i*3+2}] = {lt['pos'][2]};"
+            f"    light_pos[{i * 3}] = {lt['pos'][0]};  "
+            f"light_pos[{i * 3 + 1}] = {lt['pos'][1]};  "
+            f"light_pos[{i * 3 + 2}] = {lt['pos'][2]};"
         )
         lines.append(
-            f"    light_dir[{i*3}] = {lt['dir'][0]};  "
-            f"light_dir[{i*3+1}] = {lt['dir'][1]};  "
-            f"light_dir[{i*3+2}] = {lt['dir'][2]};"
+            f"    light_dir[{i * 3}] = {lt['dir'][0]};  "
+            f"light_dir[{i * 3 + 1}] = {lt['dir'][1]};  "
+            f"light_dir[{i * 3 + 2}] = {lt['dir'][2]};"
         )
         lines.append(f"    light_intensity[{i}] = {lt['intensity']};")
         lines.append(f"    light_radius[{i}] = {lt['radius']};")

@@ -15,7 +15,7 @@ _SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 # Add src/ to sys.path so we can import lenses directly,
 # bypassing src/__init__.py which requires bpy
 sys.path.insert(0, str(_SRC_DIR))
-from lenses import load_lenses
+from lenses import load_lenses  # noqa: E402
 
 _ICON_SIZE = 256
 _SUPERSAMPLE = 2
@@ -275,9 +275,15 @@ def _render_lens(surfaces):
 
     # Optical axis
     _draw_dashed_line(
-        draw, _PADDING * 0.5, y_center, size - _PADDING * 0.5, y_center,
-        _AXIS_COLOR, 1 * _SUPERSAMPLE,
-        dash=8 * _SUPERSAMPLE, gap=6 * _SUPERSAMPLE,
+        draw,
+        _PADDING * 0.5,
+        y_center,
+        size - _PADDING * 0.5,
+        y_center,
+        _AXIS_COLOR,
+        1 * _SUPERSAMPLE,
+        dash=8 * _SUPERSAMPLE,
+        gap=6 * _SUPERSAMPLE,
     )
 
     # Compute effective drawing aperture for every surface, clamped where
@@ -288,15 +294,23 @@ def _render_lens(surfaces):
         if i > 0 and not _is_stop(surfaces[i - 1]):
             s_prev = surfaces[i - 1]
             _, back_ap = _effective_semi_aperture(
-                positions[i - 1], _diagram_radius(s_prev), s_prev["aperture"] * 0.5,
-                positions[i], _diagram_radius(s), eff,
+                positions[i - 1],
+                _diagram_radius(s_prev),
+                s_prev["aperture"] * 0.5,
+                positions[i],
+                _diagram_radius(s),
+                eff,
             )
             eff = min(eff, back_ap)
         if i < len(surfaces) - 1 and not _is_stop(surfaces[i + 1]):
             s_next = surfaces[i + 1]
             front_ap, _ = _effective_semi_aperture(
-                positions[i], _diagram_radius(s), eff,
-                positions[i + 1], _diagram_radius(s_next), s_next["aperture"] * 0.5,
+                positions[i],
+                _diagram_radius(s),
+                eff,
+                positions[i + 1],
+                _diagram_radius(s_next),
+                s_next["aperture"] * 0.5,
             )
             eff = min(eff, front_ap)
         effective_aps.append(eff)
@@ -319,11 +333,9 @@ def _render_lens(surfaces):
                 is_cemented = True
                 break
         if is_cemented:
-            _draw_arc(draw, positions[i], r, semi_ap, to_px,
-                       _CEMENTED_LINE, 2 * _SUPERSAMPLE)
+            _draw_arc(draw, positions[i], r, semi_ap, to_px, _CEMENTED_LINE, 2 * _SUPERSAMPLE)
         else:
-            _draw_arc(draw, positions[i], r, semi_ap, to_px,
-                       _SURFACE_LINE, 2 * _SUPERSAMPLE)
+            _draw_arc(draw, positions[i], r, semi_ap, to_px, _SURFACE_LINE, 2 * _SUPERSAMPLE)
 
     # Draw element closing edges
     for front_i, back_i in elements:
@@ -368,9 +380,7 @@ def _render_lens(surfaces):
     # the system. For retrofocus designs the front element is much larger
     # than the useful ray bundle.
     stop_aps = [s["aperture"] * 0.5 for s in surfaces if _is_stop(s)]
-    ray_semi_ap = stop_aps[0] if stop_aps else (
-        min(s["aperture"] * 0.5 for s in surfaces)
-    )
+    ray_semi_ap = stop_aps[0] if stop_aps else (min(s["aperture"] * 0.5 for s in surfaces))
     clip_left = _PADDING * 0.5
     clip_right = size - _PADDING * 0.5
     for frac in (0.7, 0.5, 0.35, -0.35, -0.5, -0.7):

@@ -18,9 +18,7 @@ def _has_aspheric_data(surface: dict) -> bool:
     return any(c != 0.0 for c in coeffs)
 
 
-def _format_surface_assignments(
-    surfaces: list[dict], surface_types: list[str], focus: dict | None
-) -> str:
+def _format_surface_assignments(surfaces: list[dict], surface_types: list[str], focus: dict | None) -> str:
     """Generate OSL assignment lines for one lens's surface data."""
     close_thicknesses = {}
     if focus is not None:
@@ -43,16 +41,12 @@ def _format_surface_assignments(
         lines.append(f"    thicknesses_close[{i}] = {close_val};")
     lines.append("")
     for i, st in enumerate(surface_types):
-        lines.append(
-            f"    surface_types[{i}] = {_TYPE_VALUES[st]};"
-        )
+        lines.append(f"    surface_types[{i}] = {_TYPE_VALUES[st]};")
 
     # Only emit extra[] entries for surfaces with aspheric data;
     # OSL zero-initializes local arrays so non-aspheric surfaces
     # already have the correct default values.
-    aspheric_surfaces = [
-        (i, s) for i, s in enumerate(surfaces) if _has_aspheric_data(s)
-    ]
+    aspheric_surfaces = [(i, s) for i, s in enumerate(surfaces) if _has_aspheric_data(s)]
     if aspheric_surfaces:
         lines.append("")
         for i, s in aspheric_surfaces:
@@ -100,17 +94,13 @@ def _generate_load_lens_data(lens: dict) -> str:
         "    output float thicknesses_close[MAX_SURFACES])",
         "{",
         f"    // {lens['name']}",
-        _format_surface_assignments(
-            lens["surfaces"], lens["surface_types"], focus
-        ),
+        _format_surface_assignments(lens["surfaces"], lens["surface_types"], focus),
         "}",
     ]
     return "\n".join(lines)
 
 
-def load_osl_template(
-    template_path: Path, lens_dir: Path
-) -> tuple[str, list[dict]]:
+def load_osl_template(template_path: Path, lens_dir: Path) -> tuple[str, list[dict]]:
     """Load the OSL template and lens registry.
 
     Returns (template_text, lenses) where template_text has both

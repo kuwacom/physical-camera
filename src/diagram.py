@@ -14,10 +14,10 @@ def load_previews(lenses):
     _preview_collection = bpy.utils.previews.new()
     previews_dir = Path(__file__).parent / "previews"
     for lens in lenses:
-        stem = lens['filename_stem']
+        stem = lens["filename_stem"]
         png_path = previews_dir / f"{stem}.png"
         if png_path.exists():
-            _preview_collection.load(stem, str(png_path), 'IMAGE')
+            _preview_collection.load(stem, str(png_path), "IMAGE")
 
 
 def has_previews():
