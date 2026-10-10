@@ -70,13 +70,11 @@ def _parse_focus(data: dict, surfaces: list[dict], filename: str) -> dict | None
     return {"close_distance": close_distance, "variables": variables}
 
 
-def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
-    """Open-aperture f-number from a Y-axis paraxial trace (infinity focus).
+def _paraxial_marginal_ray(surfaces: list[dict], surface_types: list[str]) -> tuple[float, float, float, float]:
+    """Trace a ray parallel to the Y axis (y=1, nu=0) front to back at infinity spacing.
 
-    f-number = EFL / entrance pupil diameter, where the entrance pupil is
-    the stop as imaged by the front group.
+    Returns (y, nu) after the last surface plus the ray height and aperture at the stop.
     """
-    # 入射瞳は絞りを前群越しに見た像で、絞り径そのものとは一致しないため近軸追跡で求める
     # 合焦軸 (Y) に合わせ、Y にパワーを持たない cylindrical_x は平面として扱う
     y, nu, n = 1.0, 0.0, 1.0
     stop_height = 0.0
@@ -92,11 +90,33 @@ def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
         n = n_after
         if i < last:
             y += s["thickness"] * nu / n
+    return y, nu, stop_height, stop_aperture
+
+
+def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
+    """Open-aperture f-number from a Y-axis paraxial trace (infinity focus).
+
+    f-number = EFL / entrance pupil diameter, where the entrance pupil is
+    the stop as imaged by the front group.
+    """
+    # 入射瞳は絞りを前群越しに見た像で、絞り径そのものとは一致しないため近軸追跡で求める
+    _, nu, stop_height, stop_aperture = _paraxial_marginal_ray(surfaces, surface_types)
     if nu >= 0.0 or stop_height == 0.0:
         raise ValueError("lens has no positive focal length or the marginal ray misses the stop")
     efl = -1.0 / nu
     entrance_pupil = stop_aperture / abs(stop_height)
     return efl / entrance_pupil
+
+
+def paraxial_back_focal_distance(surfaces: list[dict], surface_types: list[str]) -> float:
+    """Distance from the rear vertex to the infinity-focus image plane on the Y axis (mm).
+
+    Matches the shader's compute_sensor_distance() at infinity spacing (-A/C).
+    """
+    y, nu, _, _ = _paraxial_marginal_ray(surfaces, surface_types)
+    if nu == 0.0:
+        raise ValueError("lens has no optical power")
+    return -y / nu
 
 
 def min_fstop(lens: dict) -> float:

@@ -135,6 +135,14 @@ def test_paraxial_fstop_of_simple_lens(tmp_path):
     assert lens["open_fstop"] == pytest.approx(efl / pupil, rel=1e-9)
 
 
+def test_paraxial_back_focal_distance_of_simple_lens(tmp_path):
+    # 平凸単レンズの像側主点は凸面頂点にあるため、BFD = f - (ガラス厚 / n) - 後続の空気間隔
+    lens = lenses.load_lens(_write(tmp_path / "singlet.toml", VALID_LENS))
+    f = 51.68 / (1.5168 - 1.0)
+    expected = f - 5.0 / 1.5168 - 2.0
+    assert lenses.paraxial_back_focal_distance(lens["surfaces"], lens["surface_types"]) == pytest.approx(expected)
+
+
 # データの絞り径が表記の開放 f 値まで開かないため、UI 下限が近軸の実効値に引き上げられるレンズ
 _UNREACHABLE_MAX_FSTOP = {
     "navarro_anamorphic_2x": "絞り径 28.289mm では近軸実効 f/3.94 までしか開かず、特許の根拠なしに絞り径を書き換えられない",

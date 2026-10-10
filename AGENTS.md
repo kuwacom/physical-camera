@@ -37,7 +37,7 @@ Accuracy and realism take priority in design decisions. Features with significan
 
 - `__init__.py` — registers properties, operators, and the UI panel in Camera Properties. Each camera gets its own text datablock (`Physical Lens - {cam.name}`) holding a shader with only the selected lens. On register, loads the OSL template and lens registry; shaders are generated per camera on lens selection or file load
 - `lenses.py` — reads TOML lens files from `src/lenses/` into dicts (no bpy dependency, shared by the build script). Infers a `surface_types` list per lens (`"spherical"`, `"flat"`, `"stop"`, `"aspheric"`, `"cylindrical_x"`, `"cylindrical_y"`)
-- `codegen.py` — `load_osl_template()` loads the template and lens registry; `build_camera_osl()` injects one lens's data and the scene lights into the template. Emits per-lens `#define`s (`NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`) and a `load_lens_data()` that fills the per-surface arrays
+- `codegen.py` — `load_osl_template()` loads the template and lens registry; `build_camera_osl()` injects one lens's data and the scene lights into the template. Emits per-lens `#define`s (`NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`, `SENSOR_DISTANCE_INF`) and a `load_lens_data()` that fills the per-surface arrays
 - `scene_lights.py` — collects LIGHT objects and emissive meshes in world space and generates `load_scene_lights()`. Positions are in world meters; sun directions are world-space "toward source" vectors. Up to `MAX_LIGHTS` (16), sorted by intensity. Camera-independent — camera movement does not recompile the shader
 - `diagram.py` — loads the PNGs in `src/previews/` as Blender preview icons; `src/lenses/*.toml` are the lens prescriptions (see below)
 
@@ -73,7 +73,7 @@ thickness_close = 0.89   # thickness at close_distance (infinity value lives in 
 
 ## Shader Function Pipeline
 
-1. `load_lens_data()` — generated per camera with a single lens's data; outputs `surface_types[]` (`SURFACE_SPHERICAL=0`, `SURFACE_FLAT=1`, `SURFACE_STOP=2`, `SURFACE_ASPHERIC=3`, `SURFACE_CYLINDRICAL_X=4`, `SURFACE_CYLINDRICAL_Y=5`), `extra[]` (8 floats per surface: k, A4, A6, A8, A10, reserved×3; only non-zero entries emitted), `thicknesses_close[]`. Per-lens scalars are compile-time `#define`s: `NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`
+1. `load_lens_data()` — generated per camera with a single lens's data; outputs `surface_types[]` (`SURFACE_SPHERICAL=0`, `SURFACE_FLAT=1`, `SURFACE_STOP=2`, `SURFACE_ASPHERIC=3`, `SURFACE_CYLINDRICAL_X=4`, `SURFACE_CYLINDRICAL_Y=5`), `extra[]` (8 floats per surface: k, A4, A6, A8, A10, reserved×3; only non-zero entries emitted), `thicknesses_close[]`. Per-lens scalars are compile-time `#define`s: `NUM_SURFACES`, `COATING`, `SQUEEZE`, `FOCUS_CLOSE_DISTANCE`, `SENSOR_DISTANCE_INF` (Y-axis infinity-focus back focal distance from `lenses.paraxial_back_focal_distance()`, the fallback when the focus solve has no optical power)
 2. `load_scene_lights()` / `transform_lights_to_camera()` — world-space light data converted to camera space (mm) at render time via `transform("world", "camera", ...)`; the shader only regenerates when lights actually change
 3. `rng()` — Jenkins one-at-a-time hash deriving decorrelated uniform [0,1] variates from the two camera random samples (one per salt)
 4. Thickness interpolation — `alpha = clamp(close_distance / d_obj, 0, 1)` in reciprocal object-distance space

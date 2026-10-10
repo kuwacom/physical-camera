@@ -35,6 +35,16 @@ def test_build_camera_osl_for_every_lens(template, bundled_lenses):
         assert len(types) == n
 
 
+def test_sensor_distance_fallback_is_finite(template, bundled_lenses):
+    # 光学パワーが無いときの退避先が 0 除算 (-A / C) ではなく事前計算した無限遠のセンサー位置であること
+    assert "return SENSOR_DISTANCE_INF;" in template
+    for lens in bundled_lenses:
+        osl = codegen.build_camera_osl(template, lens)
+        value = float(re.search(r"#define SENSOR_DISTANCE_INF (\S+)", osl).group(1))
+        assert value == lenses.paraxial_back_focal_distance(lens["surfaces"], lens["surface_types"])
+        assert 0.0 < value < 1000.0, lens["filename_stem"]
+
+
 def test_focus_and_aspheric_data_are_emitted(template, bundled_lenses):
     canon = next(lens for lens in bundled_lenses if lens["filename_stem"] == "canon_rf_85mm_f1_2")
     osl = codegen.build_camera_osl(template, canon)

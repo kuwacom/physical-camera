@@ -286,8 +286,9 @@ float compute_sensor_distance(
     }
 
     // Fall back to infinity focus if the system has no optical power
+    // C≈0 では -A/C が発散するため、codegen が無限遠間隔で求めた値を使う
     if (abs(C) < 1e-10)
-        return -A / C;
+        return SENSOR_DISTANCE_INF;
 
     float f = -1.0 / C;
     float bfd = -A / C;
@@ -1601,7 +1602,8 @@ shader lens_camera(
     // Scale field exit pupil separately for X and Y
     float field_semi_ap_x = field_semi_ap;
     float field_semi_ap_y = field_semi_ap;
-    if (aim_semi_ap > 1e-10) {
+    // 割る側の aim_semi_ap_y を判定しないと、Y 側だけ 0 のとき ratio が発散する
+    if (aim_semi_ap_y > 1e-10) {
         float ratio = aim_semi_ap_x / aim_semi_ap_y;
         if (ratio > 1.0) {
             field_semi_ap_y = field_semi_ap / ratio;

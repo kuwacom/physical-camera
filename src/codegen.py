@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .lenses import MAX_SURFACES, load_lenses
+from .lenses import MAX_SURFACES, load_lenses, paraxial_back_focal_distance
 from .scene_lights import generate_load_scene_lights
 
 N_EXTRA = 8
@@ -82,6 +82,8 @@ def _generate_load_lens_data(lens: dict) -> str:
         f"#define COATING {coating_val}",
         f"#define SQUEEZE {float(lens['squeeze'])}",
         f"#define FOCUS_CLOSE_DISTANCE {close_dist}",
+        # 合焦計算が解けないときの退避先 (無限遠ピントのセンサー位置)。シェーダー内では C≈0 で求められないため事前に計算する
+        f"#define SENSOR_DISTANCE_INF {paraxial_back_focal_distance(lens['surfaces'], lens['surface_types'])!r}",
         "",
         "void load_lens_data(",
         "    output float radii[MAX_SURFACES],",
