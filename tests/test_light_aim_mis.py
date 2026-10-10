@@ -144,7 +144,7 @@ def sinc2(u):
 
 def spike_axes():
     for k in range(BLADES):
-        a = BLADE_ROT + (k + 0.5) * 2.0 * math.pi / BLADES + math.pi * 0.5
+        a = BLADE_ROT + (k + 0.5) * 2.0 * math.pi / BLADES
         yield math.cos(a), math.sin(a)
 
 

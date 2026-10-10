@@ -1428,9 +1428,10 @@ float sinc2(float u)
 }
 
 // 絞り羽根 edge の辺に垂直な光条の向き。光条の選択と照準で同じ角度を使う必要がある
+// point_in_ngon() と開口の標本化は頂点を blade_rot_rad + k·2π/n に置くため、辺 k の法線 (= 光条の向き) は頂点の中間角になる
 float spike_edge_angle(float blade_rot_rad, int edge, int n)
 {
-    return blade_rot_rad + (float(edge) + 0.5) * 2.0 * M_PI / float(n) + M_PI * 0.5;
+    return blade_rot_rad + (float(edge) + 0.5) * 2.0 * M_PI / float(n);
 }
 
 // Aperture diffraction starburst via two-component mixture model.
