@@ -70,13 +70,14 @@ def _get_or_create_text_block(cam):
     return bpy.data.texts.new(name)
 
 
-def _build_camera_shader(cam):
+def _build_camera_shader(cam, osl_source=None):
     """Generate and assign a single-lens shader for a camera."""
     lens = _get_lens(cam.physical_camera)
     if lens is None:
         return
 
-    osl_source = codegen.build_camera_osl(_osl_template, lens)
+    if osl_source is None:
+        osl_source = codegen.build_camera_osl(_osl_template, lens)
     text = _get_or_create_text_block(cam)
     text.clear()
     text.write(osl_source)
@@ -489,8 +490,19 @@ def _on_load_post(_):
 
     # 旧バージョンで保存したファイルはライトをソースに埋め込んだシェーダーのため、作り直してパラメーター方式へ移行する
     for cam in bpy.data.cameras:
-        if _is_using_physical_lens(cam):
-            _build_camera_shader(cam)
+        if not _is_using_physical_lens(cam):
+            continue
+        # リンクされたカメラやテキストはライブラリ側にのみ存在し編集が保存されないため書き換えない
+        if cam.library is not None or (cam.custom_shader is not None and cam.custom_shader.library is not None):
+            continue
+        lens = _get_lens(cam.physical_camera)
+        if lens is None:
+            continue
+        osl_source = codegen.build_camera_osl(_osl_template, lens)
+        if cam.custom_shader is not None and cam.custom_shader.as_string() == osl_source:
+            # 生成ソースが一致するなら書き込みも oslc コンパイルも不要で、ファイルを開くたびに全カメラを再コンパイルしない
+            continue
+        _build_camera_shader(cam, osl_source)
 
     # 複数シーンで共有するカメラは開いているシーンのライトを最後に書いて優先する (レンダリング時は render_pre で対象シーンに合わせる)
     current = bpy.context.scene
