@@ -266,7 +266,8 @@ class CAMERA_OT_apply_physical_lens(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.object is not None and context.object.type == "CAMERA"
+        # リンクされたカメラデータへの編集はライブラリ側に保存されないため無効化する
+        return context.object is not None and context.object.type == "CAMERA" and context.object.data.library is None
 
     def execute(self, context):
         cam = context.object.data
@@ -291,6 +292,7 @@ class CAMERA_OT_disable_physical_lens(bpy.types.Operator):
         return (
             context.object is not None
             and context.object.type == "CAMERA"
+            and context.object.data.library is None
             and _is_using_physical_lens(context.object.data)
         )
 
@@ -315,34 +317,40 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
         layout = self.layout
         cam = context.object.data
         props = cam.physical_camera
+        # リンクされたカメラデータへの編集はライブラリ側に保存されないため操作系を無効化する
+        editable = cam.library is None
 
         if not _is_using_physical_lens(cam):
-            layout.operator("camera.apply_physical_lens", icon="CAMERA_DATA")
+            operator = layout.operator("camera.apply_physical_lens", icon="CAMERA_DATA")
+            operator.enabled = editable
             return
 
         layout.use_property_split = True
         layout.use_property_decorate = False
 
-        layout.prop(props, "lens")
+        column = layout.column()
+        column.enabled = editable
+
+        column.prop(props, "lens")
 
         lens = _get_lens(props)
 
         if lens is not None:
-            layout.prop(props, "fstop", text=f"f-stop (min f/{min_fstop(lens):.1f})")
+            column.prop(props, "fstop", text=f"f-stop (min f/{min_fstop(lens):.1f})")
         else:
-            layout.prop(props, "fstop")
+            column.prop(props, "fstop")
 
-        layout.separator()
-        layout.prop(props, "aperture_blades")
-        layout.prop(props, "blade_rotation")
+        column.separator()
+        column.prop(props, "aperture_blades")
+        column.prop(props, "blade_rotation")
 
-        layout.separator()
-        layout.prop(props, "chromatic_aberration")
-        layout.prop(props, "lens_ghosts")
+        column.separator()
+        column.prop(props, "chromatic_aberration")
+        column.prop(props, "lens_ghosts")
         if props.lens_ghosts:
-            layout.prop(props, "ghost_intensity")
-        layout.prop(props, "diffraction")
-        layout.prop(props, "debug_mode")
+            column.prop(props, "ghost_intensity")
+        column.prop(props, "diffraction")
+        column.prop(props, "debug_mode")
 
 
 class CAMERA_PT_physical_lens_diagram(bpy.types.Panel):
