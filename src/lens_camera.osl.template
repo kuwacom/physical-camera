@@ -254,6 +254,38 @@ int is_curved_surface(int surface_type) {
             || surface_type == SURFACE_CYLINDRICAL_X || surface_type == SURFACE_CYLINDRICAL_Y);
 }
 
+// 絞り面だけ f 値に応じて開口を縮める規則を、追跡・ABCD の全経路で揃えるため 1 か所にまとめる
+float surface_semi_aperture(
+    int idx,
+    float apertures[MAX_SURFACES],
+    int surface_types[MAX_SURFACES],
+    float aperture_scale)
+{
+    float semi_ap = apertures[idx] * 0.5;
+    if (surface_types[idx] == SURFACE_STOP)
+        semi_ap *= aperture_scale;
+    return semi_ap;
+}
+
+// X/Y 別の ABCD 行列に面のパワー phi を掛ける。シリンドリカル面の軸の扱いを射出瞳とゴーストで共有する
+void apply_abcd_power(
+    float phi, int surface_type,
+    float Ax, float Bx, float Ay, float By,
+    output float Cx, output float Dx, output float Cy, output float Dy)
+{
+    // Spherical/aspheric: power in both axes
+    // Cylindrical_x: power in X only
+    // Cylindrical_y: power in Y only
+    if (surface_type != SURFACE_CYLINDRICAL_Y) {
+        Cx -= phi * Ax;
+        Dx -= phi * Bx;
+    }
+    if (surface_type != SURFACE_CYLINDRICAL_X) {
+        Cy -= phi * Ay;
+        Dy -= phi * By;
+    }
+}
+
 float compute_sensor_distance(
     int num_surfaces,
     float radii[MAX_SURFACES],
@@ -337,17 +369,7 @@ void compute_exit_pupil(
 
         if (is_curved_surface(surface_types[i]) && n_before != n_after) {
             float phi = (n_after - n_before) / radii[i];
-            // Spherical/aspheric: power in both axes
-            // Cylindrical_x: power in X only
-            // Cylindrical_y: power in Y only
-            if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                Cx -= phi * Ax;
-                Dx -= phi * Bx;
-            }
-            if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                Cy -= phi * Ay;
-                Dy -= phi * By;
-            }
+            apply_abcd_power(phi, surface_types[i], Ax, Bx, Ay, By, Cx, Dx, Cy, Dy);
         }
 
         if (i < num_surfaces - 1) {
@@ -425,6 +447,58 @@ void compute_field_exit_pupil(
         ep_r = 0.0;
 }
 
+// ゴースト経路の 3 区間はどれも「頂点まで転送 -> 開口制約 -> 反射または屈折」の同じ手順なので 1 面分を共通化する
+// n_after は屈折後の媒質 (進行方向で区間ごとに異なる)。reflect_here が真なら n_after は使わない
+void ghost_abcd_surface(
+    int i, int reflect_here, float n_after,
+    float radii[MAX_SURFACES],
+    float apertures[MAX_SURFACES],
+    int surface_types[MAX_SURFACES],
+    float vertex_z[MAX_SURFACES],
+    float aperture_scale, float inv_sensor_aim,
+    output float Ax, output float Bx, output float Cx, output float Dx,
+    output float Ay, output float By, output float Cy, output float Dy,
+    output float prev_z, output float cur_n, output float result)
+{
+    // Transfer from prev_z to vertex_z[i]
+    float dist = vertex_z[i] - prev_z;
+    float t = dist / cur_n;
+    Ax += t * Cx;  Bx += t * Dx;
+    Ay += t * Cy;  By += t * Dy;
+
+    // Aperture constraint at this surface
+    float semi_ap = surface_semi_aperture(i, apertures, surface_types, aperture_scale);
+    float Meff_x = abs(Ax - Bx * inv_sensor_aim);
+    float Meff_y = abs(Ay - By * inv_sensor_aim);
+    float Meff = max(Meff_x, Meff_y);
+    if (Meff > 1e-10) {
+        float constraint = semi_ap / Meff;
+        if (constraint < result)
+            result = constraint;
+    }
+
+    // Power: refraction or reflection
+    if (reflect_here) {
+        // Reflection reverses the propagation direction, negating the
+        // reduced angle u = n*dh/dz. In ABCD terms this negates C and D.
+        // Curvature power is applied on top of the direction reversal.
+        Cx = -Cx;  Dx = -Dx;
+        Cy = -Cy;  Dy = -Dy;
+        if (is_curved_surface(surface_types[i]) && radii[i] != 0.0) {
+            float phi = 2.0 * cur_n / radii[i];
+            apply_abcd_power(phi, surface_types[i], Ax, Bx, Ay, By, Cx, Dx, Cy, Dy);
+        }
+    } else if (surface_types[i] != SURFACE_STOP) {
+        if (is_curved_surface(surface_types[i]) && cur_n != n_after) {
+            float phi = (n_after - cur_n) / radii[i];
+            apply_abcd_power(phi, surface_types[i], Ax, Bx, Ay, By, Cx, Dx, Cy, Dy);
+        }
+        cur_n = n_after;
+    }
+
+    prev_z = vertex_z[i];
+}
+
 // Per-pair ABCD trace through the full ghost path (all three phases including
 // reflections) to find the tightest aperture constraint projected back to the
 // aim plane. Returns a ghost-specific aim radius that replaces the main exit
@@ -451,143 +525,31 @@ float compute_ghost_aim_radius(
     float inv_sensor_aim = 1.0 / (sensor_z - aim_z);
 
     // Phase 1: aim plane → bounce_a (step -1, reflect at bounce_a)
+    // Refraction (step -1): n_after = iors[i-1] or 1.0
     for (int i = num_surfaces - 1; i >= bounce_a; i--) {
-        // Transfer from prev_z to vertex_z[i]
-        float dist = vertex_z[i] - prev_z;
-        float t = dist / cur_n;
-        Ax += t * Cx;  Bx += t * Dx;
-        Ay += t * Cy;  By += t * Dy;
-
-        // Aperture constraint at this surface
-        float semi_ap = apertures[i] * 0.5;
-        if (surface_types[i] == SURFACE_STOP)
-            semi_ap *= aperture_scale;
-        float Meff_x = abs(Ax - Bx * inv_sensor_aim);
-        float Meff_y = abs(Ay - By * inv_sensor_aim);
-        float Meff = max(Meff_x, Meff_y);
-        if (Meff > 1e-10) {
-            float constraint = semi_ap / Meff;
-            if (constraint < result)
-                result = constraint;
-        }
-
-        // Power: refraction or reflection
-        if (i == bounce_a) {
-            // Reflection reverses the propagation direction, negating the
-            // reduced angle u = n*dh/dz. In ABCD terms this negates C and D.
-            // Curvature power is applied on top of the direction reversal.
-            Cx = -Cx;  Dx = -Dx;
-            Cy = -Cy;  Dy = -Dy;
-            if (is_curved_surface(surface_types[i]) && radii[i] != 0.0) {
-                float phi = 2.0 * cur_n / radii[i];
-                if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                    Cx -= phi * Ax;  Dx -= phi * Bx;
-                }
-                if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                    Cy -= phi * Ay;  Dy -= phi * By;
-                }
-            }
-        } else if (surface_types[i] != SURFACE_STOP) {
-            // Refraction (step -1): n_after = iors[i-1] or 1.0
-            float n_after = (i > 0) ? iors[i - 1] : 1.0;
-            if (is_curved_surface(surface_types[i]) && cur_n != n_after) {
-                float phi = (n_after - cur_n) / radii[i];
-                if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                    Cx -= phi * Ax;  Dx -= phi * Bx;
-                }
-                if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                    Cy -= phi * Ay;  Dy -= phi * By;
-                }
-            }
-            cur_n = n_after;
-        }
-
-        prev_z = vertex_z[i];
+        float n_after = (i > 0) ? iors[i - 1] : 1.0;
+        ghost_abcd_surface(i, i == bounce_a, n_after,
+                           radii, apertures, surface_types, vertex_z,
+                           aperture_scale, inv_sensor_aim,
+                           Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
     }
 
     // Phase 2: bounce_a+1 → bounce_b (step +1, reflect at bounce_b)
+    // Refraction (step +1): n_after = iors[i]
     for (int i = bounce_a + 1; i <= bounce_b; i++) {
-        float dist = vertex_z[i] - prev_z;
-        float t = dist / cur_n;
-        Ax += t * Cx;  Bx += t * Dx;
-        Ay += t * Cy;  By += t * Dy;
-
-        float semi_ap = apertures[i] * 0.5;
-        if (surface_types[i] == SURFACE_STOP)
-            semi_ap *= aperture_scale;
-        float Meff_x = abs(Ax - Bx * inv_sensor_aim);
-        float Meff_y = abs(Ay - By * inv_sensor_aim);
-        float Meff = max(Meff_x, Meff_y);
-        if (Meff > 1e-10) {
-            float constraint = semi_ap / Meff;
-            if (constraint < result)
-                result = constraint;
-        }
-
-        if (i == bounce_b) {
-            Cx = -Cx;  Dx = -Dx;
-            Cy = -Cy;  Dy = -Dy;
-            if (is_curved_surface(surface_types[i]) && radii[i] != 0.0) {
-                float phi = 2.0 * cur_n / radii[i];
-                if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                    Cx -= phi * Ax;  Dx -= phi * Bx;
-                }
-                if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                    Cy -= phi * Ay;  Dy -= phi * By;
-                }
-            }
-        } else if (surface_types[i] != SURFACE_STOP) {
-            // Refraction (step +1): n_after = iors[i]
-            float n_after = iors[i];
-            if (is_curved_surface(surface_types[i]) && cur_n != n_after) {
-                float phi = (n_after - cur_n) / radii[i];
-                if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                    Cx -= phi * Ax;  Dx -= phi * Bx;
-                }
-                if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                    Cy -= phi * Ay;  Dy -= phi * By;
-                }
-            }
-            cur_n = n_after;
-        }
-
-        prev_z = vertex_z[i];
+        ghost_abcd_surface(i, i == bounce_b, iors[i],
+                           radii, apertures, surface_types, vertex_z,
+                           aperture_scale, inv_sensor_aim,
+                           Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
     }
 
     // Phase 3: bounce_b-1 → 0 (step -1, refraction only)
     for (int i = bounce_b - 1; i >= 0; i--) {
-        float dist = vertex_z[i] - prev_z;
-        float t = dist / cur_n;
-        Ax += t * Cx;  Bx += t * Dx;
-        Ay += t * Cy;  By += t * Dy;
-
-        float semi_ap = apertures[i] * 0.5;
-        if (surface_types[i] == SURFACE_STOP)
-            semi_ap *= aperture_scale;
-        float Meff_x = abs(Ax - Bx * inv_sensor_aim);
-        float Meff_y = abs(Ay - By * inv_sensor_aim);
-        float Meff = max(Meff_x, Meff_y);
-        if (Meff > 1e-10) {
-            float constraint = semi_ap / Meff;
-            if (constraint < result)
-                result = constraint;
-        }
-
-        if (surface_types[i] != SURFACE_STOP) {
-            float n_after = (i > 0) ? iors[i - 1] : 1.0;
-            if (is_curved_surface(surface_types[i]) && cur_n != n_after) {
-                float phi = (n_after - cur_n) / radii[i];
-                if (surface_types[i] != SURFACE_CYLINDRICAL_Y) {
-                    Cx -= phi * Ax;  Dx -= phi * Bx;
-                }
-                if (surface_types[i] != SURFACE_CYLINDRICAL_X) {
-                    Cy -= phi * Ay;  Dy -= phi * By;
-                }
-            }
-            cur_n = n_after;
-        }
-
-        prev_z = vertex_z[i];
+        float n_after = (i > 0) ? iors[i - 1] : 1.0;
+        ghost_abcd_surface(i, 0, n_after,
+                           radii, apertures, surface_types, vertex_z,
+                           aperture_scale, inv_sensor_aim,
+                           Ax, Bx, Cx, Dx, Ay, By, Cy, Dy, prev_z, cur_n, result);
     }
 
     out_Cx = Cx;  out_Dx = Dx;
@@ -1019,6 +981,49 @@ int reflect_at_surface(
     return 1;
 }
 
+// 巻き戻し (Mirror) と先回り (Overshoot) の両ケースで同じ平面処理 (開口判定 + 屈折) を行うため共通化する
+// Returns 1 on success; on failure sets failure_type (1 = miss, 2 = clip, 3 = TIR) and returns 0.
+int pass_flat_surface(
+    int flat_idx,
+    float aperture_scale,
+    float vertex_z[MAX_SURFACES],
+    float iors[MAX_SURFACES],
+    float apertures[MAX_SURFACES],
+    int surface_types[MAX_SURFACES],
+    float lambda_nm,
+    int num_blades,
+    float blade_rotation,
+    float coating,
+    output point p,
+    output vector d,
+    output float total_transmission,
+    output int failure_type)
+{
+    float flat_semi_ap = surface_semi_aperture(flat_idx, apertures, surface_types, aperture_scale);
+
+    point flat_p;
+    int flat_check = check_aperture_at_plane(p, d, vertex_z[flat_idx], flat_semi_ap,
+                                             surface_types[flat_idx], num_blades, blade_rotation, flat_p);
+    if (flat_check != 1) {
+        failure_type = (flat_check == 0) ? 1 : 2;
+        return 0;
+    }
+    p = flat_p;
+
+    if (surface_types[flat_idx] != SURFACE_STOP) {
+        float fn1 = iors[flat_idx];
+        float fn2 = (flat_idx > 0) ? iors[flat_idx - 1] : 1.0;
+        vector flat_d; float flat_trans;
+        if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, flat_d, flat_trans)) {
+            failure_type = 3;
+            return 0;
+        }
+        total_transmission *= flat_trans;
+        d = flat_d;
+    }
+    return 1;
+}
+
 // failure_type output: 0 = success, 1 = intersection miss, 2 = aperture clip, 3 = TIR
 // iors は波長補正済み (dispersed_iors)、vertex_z は呼び出し側で計算済みのものを受け取る
 // どちらも光線内で不変かつ射出瞳・ゴーストの計算と共有できるため、面ごとに cauchy_ior や頂点位置を求め直さない
@@ -1079,10 +1084,7 @@ int trace_lens_system(
             saved_idx = idx;
         }
 
-        float semi_ap = apertures[idx] * 0.5;
-
-        if (surface_types[idx] == SURFACE_STOP)
-            semi_ap *= aperture_scale;
+        float semi_ap = surface_semi_aperture(idx, apertures, surface_types, aperture_scale);
 
         // iors[i] = IOR of the medium between surface i and surface i+1
         // (toward sensor). When tracing sensor→scene at surface idx:
@@ -1117,9 +1119,8 @@ int trace_lens_system(
 
             result = refract_at_surface(p, d, vertex_z[idx], radii[idx], semi_ap, n1, n2, num_blades, blade_rotation, surface_types[idx], lambda_nm, coating, k_i, A4_i, A6_i, A8_i, A10_i, new_p, new_d, surface_transmission);
             if (result != 1) {
-                if (result == 0) failure_type = 1;
-                else if (result == -1) failure_type = 2;
-                else if (result == -2) failure_type = 3;
+                // refract_at_surface の 0 / -1 / -2 を failure_type の 1 / 2 / 3 に対応させる
+                failure_type = 1 - result;
                 return 0;
             }
 
@@ -1129,40 +1130,17 @@ int trace_lens_system(
             d = new_d;
 
             // Now handle the flat surface we rolled back
-            int flat_idx = idx + 1;
-            float flat_semi_ap = apertures[flat_idx] * 0.5;
-            if (surface_types[flat_idx] == SURFACE_STOP)
-                flat_semi_ap *= aperture_scale;
-
-            point flat_p;
-            int flat_check = check_aperture_at_plane(p, d, vertex_z[flat_idx], flat_semi_ap,
-                                                     surface_types[flat_idx], num_blades, blade_rotation, flat_p);
-            if (flat_check != 1) {
-                failure_type = (flat_check == 0) ? 1 : 2;
+            if (!pass_flat_surface(idx + 1, aperture_scale, vertex_z, iors, apertures, surface_types,
+                                   lambda_nm, num_blades, blade_rotation, coating,
+                                   p, d, total_transmission, failure_type))
                 return 0;
-            }
-            p = flat_p;
-
-            if (surface_types[flat_idx] != SURFACE_STOP) {
-                float fn1 = iors[flat_idx];
-                float fn2 = (flat_idx > 0) ? iors[flat_idx - 1] : 1.0;
-                vector flat_d; float flat_trans;
-                if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, flat_d, flat_trans)) {
-                    failure_type = 3;
-                    return 0;
-                }
-                total_transmission *= flat_trans;
-                d = flat_d;
-            }
 
             surfaces_passed += 1;
             continue;
         }
 
         if (result != 1) {
-            if (result == 0) failure_type = 1;
-            else if (result == -1) failure_type = 2;
-            else if (result == -2) failure_type = 3;
+            failure_type = 1 - result;
             return 0;
         }
 
@@ -1177,31 +1155,10 @@ int trace_lens_system(
         // Overshoot: a curved surface hit overshoots past the next flat
         // surface's vertex. Handle the flat surface now and skip it later.
         if (idx > 0 && !is_curved_surface(surface_types[idx - 1]) && p[2] < vertex_z[idx - 1]) {
-            int next_idx = idx - 1;
-            float next_semi_ap = apertures[next_idx] * 0.5;
-            if (surface_types[next_idx] == SURFACE_STOP)
-                next_semi_ap *= aperture_scale;
-
-            point next_p;
-            int next_check = check_aperture_at_plane(p, d, vertex_z[next_idx], next_semi_ap,
-                                                     surface_types[next_idx], num_blades, blade_rotation, next_p);
-            if (next_check != 1) {
-                failure_type = (next_check == 0) ? 1 : 2;
+            if (!pass_flat_surface(idx - 1, aperture_scale, vertex_z, iors, apertures, surface_types,
+                                   lambda_nm, num_blades, blade_rotation, coating,
+                                   p, d, total_transmission, failure_type))
                 return 0;
-            }
-            p = next_p;
-
-            if (surface_types[next_idx] != SURFACE_STOP) {
-                float fn1 = iors[next_idx];
-                float fn2 = (next_idx > 0) ? iors[next_idx - 1] : 1.0;
-                vector next_d; float next_trans;
-                if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, next_d, next_trans)) {
-                    failure_type = 3;
-                    return 0;
-                }
-                total_transmission *= next_trans;
-                d = next_d;
-            }
 
             surfaces_passed += 1;
             skip_count = 1;
@@ -1240,9 +1197,7 @@ int trace_surface_range(
     total_transmission = 1.0;
 
     for (int idx = start_idx; ; idx += step) {
-        float semi_ap = apertures[idx] * 0.5;
-        if (surface_types[idx] == SURFACE_STOP)
-            semi_ap *= aperture_scale;
+        float semi_ap = surface_semi_aperture(idx, apertures, surface_types, aperture_scale);
 
         float n1, n2;
         if (step < 0) {
@@ -1357,6 +1312,23 @@ int trace_ghost_path(
     return 1;
 }
 
+// sinc²(u) = (sin(πu) / πu)²。回折の照準あり・なし両方の重みで同じ式を使う
+float sinc2(float u)
+{
+    if (abs(u) < 1e-6)
+        return 1.0;
+    float piu = M_PI * u;
+    float s = sin(piu) / piu;
+    s *= s;
+    return s;
+}
+
+// 絞り羽根 edge の辺に垂直な光条の向き。光条の選択と照準で同じ角度を使う必要がある
+float spike_edge_angle(float blade_rot_rad, int edge, int n)
+{
+    return blade_rot_rad + (float(edge) + 0.5) * 2.0 * M_PI / float(n) + M_PI * 0.5;
+}
+
 // Aperture diffraction starburst via two-component mixture model.
 // Returns a weight multiplier and sets a transverse direction perturbation.
 // Core rays (most energy) pass through unperturbed; spike rays are deflected
@@ -1385,26 +1357,295 @@ float apply_diffraction(
     // Spike ray: select a random edge and sample along its perpendicular
     int edge = int(floor(hash2 * float(n)));
     if (edge >= n) edge = n - 1;
-    float spike_angle = blade_rot_rad + (float(edge) + 0.5) * 2.0 * M_PI / float(n) + M_PI * 0.5;
+    float spike_angle = spike_edge_angle(blade_rot_rad, edge, n);
 
     // Cauchy with scale 1/π importance-samples sinc² with near-flat weights:
     // peak weight ~1.4 at u≈0.48, vs π≈3.14 with scale 1
     float h3 = clamp(hash3, 1e-6, 1.0 - 1e-6);
     float cauchy_u = tan(M_PI * (h3 - 0.5)) / M_PI;
 
-    float sinc_val;
-    if (abs(cauchy_u) < 1e-6) {
-        sinc_val = 1.0;
-    } else {
-        float piu = M_PI * cauchy_u;
-        sinc_val = sin(piu) / piu;
-        sinc_val *= sinc_val;
-    }
+    float sinc_val = sinc2(cauchy_u);
     float weight = sinc_val * (1.0 + M_PI * M_PI * cauchy_u * cauchy_u);
 
     float theta = cauchy_u * theta0;
     perturbation = vector(cos(spike_angle) * theta, sin(spike_angle) * theta, 0.0);
     return weight;
+}
+
+// 直接光・ゴーストとも初期光線に同じ cos^4 減光を掛ける
+float cos4_falloff(vector dir)
+{
+    vector axis = vector(0, 0, -1);
+    float cos_theta = dot(normalize(dir), axis);
+    return cos_theta * cos_theta * cos_theta * cos_theta;
+}
+
+// レンズ空間 (mm, -Z が被写体側) から Blender カメラ空間 (m, +Z が被写体側) への変換と分光重みは直接光・ゴーストで共通
+void write_camera_ray(
+    point exit_p, vector exit_d, float w, float lambda, int chromatic_aberration,
+    output point position, output vector direction, output color throughput)
+{
+    position = point(exit_p[0] * 0.001,
+                     exit_p[1] * 0.001,
+                     -exit_p[2] * 0.001);
+    direction = normalize(vector(exit_d[0], exit_d[1], -exit_d[2]));
+
+    if (chromatic_aberration) {
+        color spectral_norm = color(1.7050, 2.5996, 2.7576);
+        color rgb_w = wavelength_to_rgb(lambda) * spectral_norm;
+        throughput = color(w * rgb_w[0], w * rgb_w[1], w * rgb_w[2]);
+    } else {
+        throughput = color(w, w, w);
+    }
+}
+
+// CDF scan to select light proportional to intensity
+// 見つからないときの扱いがゴーストと回折で異なるため、-1 を返して呼び出し側に任せる
+int select_light(int num_lights, float weights[MAX_LIGHTS], float total, float hash)
+{
+    float target = hash * total;
+    float cumul = 0.0;
+    for (int li = 0; li < num_lights; li++) {
+        if (weights[li] <= 0.0) continue;
+        cumul += weights[li];
+        if (cumul >= target)
+            return li;
+    }
+    return -1;
+}
+
+// Sum pair weights (R_a * R_b) for importance sampling CDF
+// Σ_{a<b} R_a R_b = Σ_a R_a * (後方の R の和) なので、接尾和で O(N) にする
+// 波長依存 (分散・コーティング) のため焼き込めず、二重ループだと最大 630 組を光線ごとに走査することになる
+float ghost_pair_total_weight(
+    int num_surfaces,
+    float surface_R[MAX_SURFACES],
+    output float suffix_R[MAX_SURFACES],
+    output int num_pairs)
+{
+    float total = 0.0;
+    float suffix_sum = 0.0;
+    int num_reflective = 0;
+    for (int i = num_surfaces - 1; i >= 0; i--) {
+        suffix_R[i] = suffix_sum;
+        if (surface_R[i] < 1e-10) continue;
+        suffix_sum += surface_R[i];
+        total += surface_R[i] * suffix_R[i];
+        num_reflective++;
+    }
+    num_pairs = num_reflective * (num_reflective - 1) / 2;
+    return total;
+}
+
+// Select pair with probability proportional to R_a * R_b
+// Returns 1 if a pair was found (0 only on floating-point edge cases).
+int select_ghost_pair(
+    int num_surfaces,
+    float surface_R[MAX_SURFACES],
+    float suffix_R[MAX_SURFACES],
+    float target_w,
+    output int ghost_a, output int ghost_b, output float pair_weight)
+{
+    ghost_a = -1;
+    float cumulative = 0.0;
+
+    for (int a = 0; a < num_surfaces && ghost_a < 0; a++) {
+        if (surface_R[a] < 1e-10) continue;
+        // 行 a の組をまとめて飛ばし、目標を含む行だけ b を走査する (CDF の順序は二重ループと同じ)
+        float row_w = surface_R[a] * suffix_R[a];
+        if (cumulative + row_w < target_w) {
+            cumulative += row_w;
+            continue;
+        }
+        for (int b = a + 1; b < num_surfaces && ghost_a < 0; b++) {
+            if (surface_R[b] < 1e-10) continue;
+            cumulative += surface_R[a] * surface_R[b];
+            if (cumulative >= target_w) {
+                ghost_a = a;
+                ghost_b = b;
+                pair_weight = surface_R[a] * surface_R[b];
+            }
+        }
+    }
+    return ghost_a >= 0;
+}
+
+// ゴースト光線をライトへ向ける照準。ABCD 逆算で得た照準点にライトの見かけの大きさ分のジッタを加える
+// Returns 1 if a light was selected (aim_x / aim_y set), 0 to fall back to uniform sampling.
+int aim_ghost_at_lights(
+    int num_lights,
+    int light_types[MAX_LIGHTS],
+    float light_pos[MAX_LIGHTS_3],
+    float light_dir[MAX_LIGHTS_3],
+    float light_intensity[MAX_LIGHTS],
+    float light_radius[MAX_LIGHTS],
+    float g_Cx, float g_Dx, float g_Cy, float g_Dy,
+    float sensor_x, float sensor_y, float sensor_z,
+    float aim_z, float ghost_semi_ap, float front_z,
+    float uniform_aim_x, float uniform_aim_y,
+    point rnd,
+    output float aim_x, output float aim_y)
+{
+    float aim_hx[MAX_LIGHTS], aim_hy[MAX_LIGHTS];
+    float aim_weights[MAX_LIGHTS], aim_total = 0.0;
+    float denom_x = 0.0, denom_y = 0.0;
+
+    if (!compute_light_aim_points(
+            num_lights, light_types, light_pos,
+            light_dir, light_intensity,
+            g_Cx, g_Dx, g_Cy, g_Dy,
+            sensor_x, sensor_y, sensor_z,
+            aim_z, ghost_semi_ap, front_z,
+            aim_hx, aim_hy, aim_weights, aim_total,
+            denom_x, denom_y))
+        return 0;
+
+    int valid_x = abs(denom_x) > 1e-12;
+    int valid_y = abs(denom_y) > 1e-12;
+
+    int sel = select_light(num_lights, aim_weights, aim_total, rng(rnd[0], rnd[1], 4));
+    if (sel < 0)
+        return 0;
+
+    aim_x = valid_x ? aim_hx[sel] : uniform_aim_x;
+    aim_y = valid_y ? aim_hy[sel] : uniform_aim_y;
+
+    // Jitter for light angular size
+    if (light_radius[sel] > 0.0) {
+        float radius_angle = 0.0;
+        if (light_types[sel] == 1) {
+            radius_angle = light_radius[sel];
+        } else {
+            float lpz = light_pos[sel * 3 + 2];
+            float d = front_z - lpz;
+            if (d > 1.0)
+                radius_angle = light_radius[sel] / d;
+        }
+        float jitter_r_x = valid_x ? radius_angle / abs(denom_x) : 0.0;
+        float jitter_r_y = valid_y ? radius_angle / abs(denom_y) : 0.0;
+        float jh = rng(rnd[0], rnd[1], 5);
+        float ja = rnd[1] * 2.0 * M_PI;
+        float jr = sqrt(jh);
+        aim_x += jr * cos(ja) * jitter_r_x;
+        aim_y += jr * sin(ja) * jitter_r_y;
+    }
+
+    // Clamp to ghost aperture
+    float aim_r = sqrt(aim_x * aim_x + aim_y * aim_y);
+    if (aim_r > ghost_semi_ap) {
+        float scale = ghost_semi_ap / aim_r;
+        aim_x *= scale;
+        aim_y *= scale;
+    }
+    return 1;
+}
+
+// 回折光条をライト方向へ向ける照準。光条軸に沿った 2 次元 sinc² の重みに選択確率の逆数を掛けて返す
+// Returns 1 if aimed (diff_perturb / diff_w set), 0 to fall back to apply_diffraction().
+int aim_diffraction_at_lights(
+    int n, float blade_rot_rad, float theta0, float theta0_perp,
+    int num_lights,
+    int light_types[MAX_LIGHTS],
+    float light_pos[MAX_LIGHTS_3],
+    float light_dir[MAX_LIGHTS_3],
+    float light_intensity[MAX_LIGHTS],
+    float light_radius[MAX_LIGHTS],
+    point exit_origin, vector exit_dir,
+    point rnd, float diff_h2,
+    output vector diff_perturb, output float diff_w)
+{
+    // Exit ray angular components (relative to optical axis)
+    float exit_ax = exit_dir[0] / (-exit_dir[2]);
+    float exit_ay = exit_dir[1] / (-exit_dir[2]);
+
+    float theta_lx[MAX_LIGHTS], theta_ly[MAX_LIGHTS];
+    float diff_aim_weights[MAX_LIGHTS];
+    float diff_aim_total = 0.0;
+
+    for (int li = 0; li < num_lights; li++) {
+        diff_aim_weights[li] = 0.0;
+        float tx = 0.0, ty = 0.0;
+
+        if (light_types[li] == 1) {
+            float ldz = light_dir[li * 3 + 2];
+            if (ldz >= 0.0) continue;
+            tx = -light_dir[li * 3 + 0] / ldz;
+            ty = -light_dir[li * 3 + 1] / ldz;
+        } else {
+            float dx = light_pos[li * 3 + 0] - exit_origin[0];
+            float dy = light_pos[li * 3 + 1] - exit_origin[1];
+            float dz = light_pos[li * 3 + 2] - exit_origin[2];
+            if (dz >= 0.0) continue;
+            tx = dx / (-dz);
+            ty = dy / (-dz);
+        }
+        // Relative to exit direction (diffraction PSF is centered there)
+        theta_lx[li] = tx - exit_ax;
+        theta_ly[li] = ty - exit_ay;
+        diff_aim_weights[li] = light_intensity[li];
+        diff_aim_total += light_intensity[li];
+    }
+
+    if (diff_aim_total <= 0.0)
+        return 0;
+
+    int sel = select_light(num_lights, diff_aim_weights, diff_aim_total, rng(rnd[0], rnd[1], 10));
+    // Guard against floating-point edge case where CDF
+    // scan doesn't match — fall back to first valid light
+    if (sel < 0) {
+        for (int li = 0; li < num_lights; li++) {
+            if (diff_aim_weights[li] > 0.0) { sel = li; break; }
+        }
+    }
+
+    float lx = theta_lx[sel];
+    float ly = theta_ly[sel];
+
+    // Find spike edge closest to light direction
+    int best_edge = 0;
+    float best_dot = -1.0;
+    float light_angle = atan2(ly, lx);
+    for (int k = 0; k < n; k++) {
+        float spike_a = spike_edge_angle(blade_rot_rad, k, n);
+        float d = abs(cos(spike_a - light_angle));
+        if (d > best_dot) {
+            best_dot = d;
+            best_edge = k;
+        }
+    }
+
+    float spike_a = spike_edge_angle(blade_rot_rad, best_edge, n);
+    float spike_cx = cos(spike_a);
+    float spike_cy = sin(spike_a);
+
+    // Project light onto spike-parallel / perpendicular axes
+    float u_par = lx * spike_cx + ly * spike_cy;
+    float u_perp = -lx * spike_cy + ly * spike_cx;
+
+    // Jitter for extended light sources
+    float light_r = light_radius[sel];
+    if (light_types[sel] == 1) {
+        // Sun radius is 0 in light data; use physical angular radius
+        light_r = 0.00436;
+    } else {
+        float lpz = light_pos[sel * 3 + 2] - exit_origin[2];
+        light_r = (abs(lpz) > 1e-6) ? light_r / abs(lpz) : 0.0;
+    }
+    float jh = rng(rnd[0], rnd[1], 11);
+    float ja = diff_h2 * 2.0 * M_PI;
+    float jr = sqrt(jh);
+    u_par += jr * cos(ja) * light_r;
+    u_perp += jr * sin(ja) * light_r;
+
+    // 2D sinc² weight
+    float sinc_par = sinc2(u_par / theta0);
+    float sinc_perp = sinc2(u_perp / theta0_perp);
+
+    diff_perturb = vector(u_par * spike_cx - u_perp * spike_cy,
+                          u_par * spike_cy + u_perp * spike_cx, 0.0);
+    diff_w = sinc_par * sinc_perp * float(n) * diff_aim_total
+           / (0.7 * light_intensity[sel]);
+    return 1;
 }
 
 shader lens_camera(
@@ -1447,9 +1688,12 @@ shader lens_camera(
     float sensor_x = (0.5 - rx) * sensor_w;
     float sensor_y = (0.5 - ry) * sensor_h;
 
+    // debug_mode は float で渡るため、各モードの範囲 [k-0.5, k+0.5) を一度だけ整数に丸めて比較する
+    int debug_view = int(floor(debug_mode + 0.5));
+
     // Debug mode 1: pinhole camera to verify the framework
     // +Z is the view direction in Blender's OSL camera convention
-    if (debug_mode >= 0.5 && debug_mode < 1.5) {
+    if (debug_view == 1) {
         position = point(0, 0, 0);
         direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
         throughput = 1.0;
@@ -1642,20 +1886,8 @@ shader lens_camera(
         // onaxis_fresnel_transmission() で求めた値を再利用する。絞りは反射面にならないので除く
         surface_R[stop_index] = 0.0;
 
-        // Sum pair weights (R_a * R_b) for importance sampling CDF
-        // Σ_{a<b} R_a R_b = Σ_a R_a * (後方の R の和) なので、接尾和で O(N) にする
-        // 波長依存 (分散・コーティング) のため焼き込めず、二重ループだと最大 630 組を光線ごとに走査することになる
         float suffix_R[MAX_SURFACES];
-        float suffix_sum = 0.0;
-        int num_reflective = 0;
-        for (int i = num_surfaces - 1; i >= 0; i--) {
-            suffix_R[i] = suffix_sum;
-            if (surface_R[i] < 1e-10) continue;
-            suffix_sum += surface_R[i];
-            ghost_total_weight += surface_R[i] * suffix_R[i];
-            num_reflective++;
-        }
-        num_ghost_pairs = num_reflective * (num_reflective - 1) / 2;
+        ghost_total_weight = ghost_pair_total_weight(num_surfaces, surface_R, suffix_R, num_ghost_pairs);
 
         if (num_ghost_pairs > 0 && ghost_total_weight > 0.0) {
             // Adaptive sample allocation: spend more on bright ghosts (uncoated),
@@ -1666,37 +1898,12 @@ shader lens_camera(
                 0.02, 0.5);
 
             float ghost_hash = rng(rnd[0], rnd[1], 1);
-            int ghosts_only = (debug_mode >= 3.5 && debug_mode < 4.5) ? 1 : 0;
 
-            if (ghosts_only || ghost_hash < adaptive_frac) {
-                trace_ghost = 1;
-
-                // Select pair with probability proportional to R_a * R_b
+            if (debug_view == 4 || ghost_hash < adaptive_frac) {
                 float pair_hash = rng(rnd[0], rnd[1], 2);
-                float target_w = pair_hash * ghost_total_weight;
-                float cumulative = 0.0;
-
-                for (int a = 0; a < num_surfaces && ghost_a < 0; a++) {
-                    if (surface_R[a] < 1e-10) continue;
-                    // 行 a の組をまとめて飛ばし、目標を含む行だけ b を走査する (CDF の順序は二重ループと同じ)
-                    float row_w = surface_R[a] * suffix_R[a];
-                    if (cumulative + row_w < target_w) {
-                        cumulative += row_w;
-                        continue;
-                    }
-                    for (int b = a + 1; b < num_surfaces && ghost_a < 0; b++) {
-                        if (surface_R[b] < 1e-10) continue;
-                        cumulative += surface_R[a] * surface_R[b];
-                        if (cumulative >= target_w) {
-                            ghost_a = a;
-                            ghost_b = b;
-                            ghost_pair_weight = surface_R[a] * surface_R[b];
-                        }
-                    }
-                }
-
-                if (ghost_a < 0)
-                    trace_ghost = 0;
+                trace_ghost = select_ghost_pair(num_surfaces, surface_R, suffix_R,
+                                                pair_hash * ghost_total_weight,
+                                                ghost_a, ghost_b, ghost_pair_weight);
             }
         }
     }
@@ -1717,14 +1924,14 @@ shader lens_camera(
     }
 
     // Debug mode 4: ghosts only — kill direct rays
-    if (debug_mode >= 3.5 && debug_mode < 4.5 && !trace_ghost) {
+    if (debug_view == 4 && !trace_ghost) {
         throughput = 0.0;
         return;
     }
 
     // Debug mode 5: ghost aim diagnostic
     // R = num_lights / MAX_LIGHTS, G = light aiming valid, B = trace_ghost
-    if (debug_mode >= 4.5 && debug_mode < 5.5) {
+    if (debug_view == 5) {
         position = point(0, 0, 0);
         direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
 
@@ -1791,71 +1998,16 @@ shader lens_camera(
         float uniform_aim_y = ghost_r_u * sin(ghost_angle_u);
 
         if (num_lights > 0 && ghost_semi_ap > 0.0 && light_hash < 0.7) {
-            float aim_hx[MAX_LIGHTS], aim_hy[MAX_LIGHTS];
-            float aim_weights[MAX_LIGHTS], aim_total = 0.0;
-            float denom_x = 0.0, denom_y = 0.0;
-
-            if (compute_light_aim_points(
-                    num_lights, light_types, light_pos,
-                    light_dir, light_intensity,
-                    g_Cx, g_Dx, g_Cy, g_Dy,
-                    sensor_x, sensor_y, sensor_z,
-                    aim_z, ghost_semi_ap, front_z,
-                    aim_hx, aim_hy, aim_weights, aim_total,
-                    denom_x, denom_y)) {
-
-                int valid_x = abs(denom_x) > 1e-12;
-                int valid_y = abs(denom_y) > 1e-12;
-
-                // CDF scan to select light proportional to intensity
-                float sel_hash = rng(rnd[0], rnd[1], 4);
-                float target = sel_hash * aim_total;
-                float cumul = 0.0;
-                int sel = -1;
-
-                for (int li = 0; li < num_lights && sel < 0; li++) {
-                    if (aim_weights[li] <= 0.0) continue;
-                    cumul += aim_weights[li];
-                    if (cumul >= target)
-                        sel = li;
-                }
-
-                if (sel >= 0) {
-                    aim_x = valid_x ? aim_hx[sel] : uniform_aim_x;
-                    aim_y = valid_y ? aim_hy[sel] : uniform_aim_y;
-
-                    // Jitter for light angular size
-                    if (light_radius[sel] > 0.0) {
-                        float radius_angle = 0.0;
-                        if (light_types[sel] == 1) {
-                            radius_angle = light_radius[sel];
-                        } else {
-                            float lpz = light_pos[sel * 3 + 2];
-                            float d = front_z - lpz;
-                            if (d > 1.0)
-                                radius_angle = light_radius[sel] / d;
-                        }
-                        float jitter_r_x = valid_x ? radius_angle / abs(denom_x) : 0.0;
-                        float jitter_r_y = valid_y ? radius_angle / abs(denom_y) : 0.0;
-                        float jh = rng(rnd[0], rnd[1], 5);
-                        float ja = rnd[1] * 2.0 * M_PI;
-                        float jr = sqrt(jh);
-                        aim_x += jr * cos(ja) * jitter_r_x;
-                        aim_y += jr * sin(ja) * jitter_r_y;
-                    }
-
-                    // Clamp to ghost aperture
-                    float aim_r = sqrt(aim_x * aim_x + aim_y * aim_y);
-                    if (aim_r > ghost_semi_ap) {
-                        float scale = ghost_semi_ap / aim_r;
-                        aim_x *= scale;
-                        aim_y *= scale;
-                    }
-
-                    use_light_aim = 1;
-                    pdf_factor = 1.0 / 0.7;
-                }
-            }
+            use_light_aim = aim_ghost_at_lights(
+                num_lights, light_types, light_pos, light_dir,
+                light_intensity, light_radius,
+                g_Cx, g_Dx, g_Cy, g_Dy,
+                sensor_x, sensor_y, sensor_z,
+                aim_z, ghost_semi_ap, front_z,
+                uniform_aim_x, uniform_aim_y, rnd,
+                aim_x, aim_y);
+            if (use_light_aim)
+                pdf_factor = 1.0 / 0.7;
         }
 
         if (!use_light_aim) {
@@ -1882,12 +2034,9 @@ shader lens_camera(
             ghost_exit, ghost_dir, ghost_T);
 
         if (ghost_ok) {
-            vector axis = vector(0, 0, -1);
-            float cos_theta = dot(normalize(ghost_initial_dir), axis);
-            float weight = cos_theta * cos_theta * cos_theta * cos_theta;
+            float weight = cos4_falloff(ghost_initial_dir);
 
-            int ghosts_only = (debug_mode >= 3.5 && debug_mode < 4.5) ? 1 : 0;
-            float frac = ghosts_only ? 1.0 : adaptive_frac;
+            float frac = (debug_view == 4) ? 1.0 : adaptive_frac;
             // Ghost rays sample a smaller disk than direct rays — scale by
             // the area ratio so ghosts contribute proportional étendue.
             float area_ratio = (ghost_semi_ap * ghost_semi_ap)
@@ -1896,18 +2045,8 @@ shader lens_camera(
                     * (ghost_total_weight / ghost_pair_weight) / frac * ghost_intensity
                     * pdf_factor * area_ratio;
 
-            position = point(ghost_exit[0] * 0.001,
-                             ghost_exit[1] * 0.001,
-                             -ghost_exit[2] * 0.001);
-            direction = normalize(vector(ghost_dir[0], ghost_dir[1], -ghost_dir[2]));
-
-            if (chromatic_aberration) {
-                color spectral_norm = color(1.7050, 2.5996, 2.7576);
-                color rgb_w = wavelength_to_rgb(lambda) * spectral_norm;
-                throughput = color(w * rgb_w[0], w * rgb_w[1], w * rgb_w[2]);
-            } else {
-                throughput = color(w, w, w);
-            }
+            write_camera_ray(ghost_exit, ghost_dir, w, lambda, chromatic_aberration,
+                             position, direction, throughput);
         } else {
             throughput = 0.0;
         }
@@ -1933,7 +2072,7 @@ shader lens_camera(
     // White = all passed.
     // Green = aperture clip, Blue = TIR, Red = intersection miss.
     // Brightness = how far the ray got.
-    if (debug_mode >= 1.5 && debug_mode < 2.5) {
+    if (debug_view == 2) {
         position = point(0, 0, 0);
         direction = normalize(vector(-sensor_x, -sensor_y, 50.0));
         if (ok) {
@@ -1949,7 +2088,7 @@ shader lens_camera(
     }
 
     // Debug mode 3: exit direction as RGB (only for rays that survive)
-    if (debug_mode >= 2.5 && debug_mode < 3.5) {
+    if (debug_view == 3) {
         if (ok) {
             vector d_norm = normalize(exit_dir);
             position = point(0, 0, 0);
@@ -1964,9 +2103,7 @@ shader lens_camera(
     }
 
     if (ok) {
-        vector axis = vector(0, 0, -1);
-        float cos_theta = dot(normalize(initial_dir), axis);
-        float weight = cos_theta * cos_theta * cos_theta * cos_theta;
+        float weight = cos4_falloff(initial_dir);
 
         float w = weight * (total_transmission / onaxis_T);
 
@@ -1995,127 +2132,13 @@ shader lens_camera(
                 vector diff_perturb = vector(0, 0, 0);
                 float diff_w = 1.0;
 
-                // Exit ray angular components (relative to optical axis)
-                float exit_ax = exit_dir[0] / (-exit_dir[2]);
-                float exit_ay = exit_dir[1] / (-exit_dir[2]);
-
                 if (num_lights > 0 && aim_hash < 0.7) {
-                    float theta_lx[MAX_LIGHTS], theta_ly[MAX_LIGHTS];
-                    float diff_aim_weights[MAX_LIGHTS];
-                    float diff_aim_total = 0.0;
-
-                    for (int li = 0; li < num_lights; li++) {
-                        diff_aim_weights[li] = 0.0;
-                        float tx = 0.0, ty = 0.0;
-
-                        if (light_types[li] == 1) {
-                            float ldz = light_dir[li * 3 + 2];
-                            if (ldz >= 0.0) continue;
-                            tx = -light_dir[li * 3 + 0] / ldz;
-                            ty = -light_dir[li * 3 + 1] / ldz;
-                        } else {
-                            float dx = light_pos[li * 3 + 0] - exit_origin[0];
-                            float dy = light_pos[li * 3 + 1] - exit_origin[1];
-                            float dz = light_pos[li * 3 + 2] - exit_origin[2];
-                            if (dz >= 0.0) continue;
-                            tx = dx / (-dz);
-                            ty = dy / (-dz);
-                        }
-                        // Relative to exit direction (diffraction PSF is centered there)
-                        theta_lx[li] = tx - exit_ax;
-                        theta_ly[li] = ty - exit_ay;
-                        diff_aim_weights[li] = light_intensity[li];
-                        diff_aim_total += light_intensity[li];
-                    }
-
-                    if (diff_aim_total > 0.0) {
-                        float sel_hash = rng(rnd[0], rnd[1], 10);
-                        float target = sel_hash * diff_aim_total;
-                        float cumul = 0.0;
-                        int sel = -1;
-                        for (int li = 0; li < num_lights; li++) {
-                            if (diff_aim_weights[li] <= 0.0) continue;
-                            cumul += diff_aim_weights[li];
-                            if (cumul >= target) { sel = li; break; }
-                        }
-                        // Guard against floating-point edge case where CDF
-                        // scan doesn't match — fall back to first valid light
-                        if (sel < 0) {
-                            for (int li = 0; li < num_lights; li++) {
-                                if (diff_aim_weights[li] > 0.0) { sel = li; break; }
-                            }
-                        }
-
-                        float lx = theta_lx[sel];
-                        float ly = theta_ly[sel];
-
-                        // Find spike edge closest to light direction
-                        int best_edge = 0;
-                        float best_dot = -1.0;
-                        float light_angle = atan2(ly, lx);
-                        for (int k = 0; k < n; k++) {
-                            float spike_a = blade_rot_rad
-                                          + (float(k) + 0.5) * 2.0 * M_PI / float(n)
-                                          + M_PI * 0.5;
-                            float d = abs(cos(spike_a - light_angle));
-                            if (d > best_dot) {
-                                best_dot = d;
-                                best_edge = k;
-                            }
-                        }
-
-                        float spike_a = blade_rot_rad
-                                      + (float(best_edge) + 0.5) * 2.0 * M_PI / float(n)
-                                      + M_PI * 0.5;
-                        float spike_cx = cos(spike_a);
-                        float spike_cy = sin(spike_a);
-
-                        // Project light onto spike-parallel / perpendicular axes
-                        float u_par = lx * spike_cx + ly * spike_cy;
-                        float u_perp = -lx * spike_cy + ly * spike_cx;
-
-                        // Jitter for extended light sources
-                        float light_r = light_radius[sel];
-                        if (light_types[sel] == 1) {
-                            // Sun radius is 0 in light data; use physical angular radius
-                            light_r = 0.00436;
-                        } else {
-                            float lpz = light_pos[sel * 3 + 2] - exit_origin[2];
-                            light_r = (abs(lpz) > 1e-6) ? light_r / abs(lpz) : 0.0;
-                        }
-                        float jh = rng(rnd[0], rnd[1], 11);
-                        float ja = diff_h2 * 2.0 * M_PI;
-                        float jr = sqrt(jh);
-                        u_par += jr * cos(ja) * light_r;
-                        u_perp += jr * sin(ja) * light_r;
-
-                        // 2D sinc² weight
-                        float sinc_par;
-                        float c_par = u_par / theta0;
-                        if (abs(c_par) < 1e-6) {
-                            sinc_par = 1.0;
-                        } else {
-                            float piu = M_PI * c_par;
-                            sinc_par = sin(piu) / piu;
-                            sinc_par *= sinc_par;
-                        }
-
-                        float sinc_perp;
-                        float c_perp = u_perp / theta0_perp;
-                        if (abs(c_perp) < 1e-6) {
-                            sinc_perp = 1.0;
-                        } else {
-                            float piu = M_PI * c_perp;
-                            sinc_perp = sin(piu) / piu;
-                            sinc_perp *= sinc_perp;
-                        }
-
-                        diff_perturb = vector(u_par * spike_cx - u_perp * spike_cy,
-                                              u_par * spike_cy + u_perp * spike_cx, 0.0);
-                        diff_w = sinc_par * sinc_perp * float(n) * diff_aim_total
-                               / (0.7 * light_intensity[sel]);
-                        use_aimed = 1;
-                    }
+                    use_aimed = aim_diffraction_at_lights(
+                        n, blade_rot_rad, theta0, theta0_perp,
+                        num_lights, light_types, light_pos, light_dir,
+                        light_intensity, light_radius,
+                        exit_origin, exit_dir, rnd, diff_h2,
+                        diff_perturb, diff_w);
                 }
 
                 if (!use_aimed) {
@@ -2131,18 +2154,8 @@ shader lens_camera(
             }
         }
 
-        position = point(exit_origin[0] * 0.001,
-                         exit_origin[1] * 0.001,
-                         -exit_origin[2] * 0.001);
-        direction = normalize(vector(exit_dir[0], exit_dir[1], -exit_dir[2]));
-
-        if (chromatic_aberration) {
-            color spectral_norm = color(1.7050, 2.5996, 2.7576);
-            color rgb_w = wavelength_to_rgb(lambda) * spectral_norm;
-            throughput = color(w * rgb_w[0], w * rgb_w[1], w * rgb_w[2]);
-        } else {
-            throughput = color(w, w, w);
-        }
+        write_camera_ray(exit_origin, exit_dir, w, lambda, chromatic_aberration,
+                         position, direction, throughput);
     } else {
         throughput = 0.0;
     }
