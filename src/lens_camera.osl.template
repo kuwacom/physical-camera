@@ -1,7 +1,4 @@
-#define MAX_SURFACES 36
-#define N_EXTRA 8
-// OSL array sizes must be integer literals: MAX_SURFACES * N_EXTRA
-#define MAX_EXTRA 288
+// MAX_SURFACES / N_EXTRA / MAX_EXTRA は lenses.py の値と一致させるため codegen.py がレンズデータ部に出力する
 
 #define SURFACE_SPHERICAL     0
 #define SURFACE_FLAT          1

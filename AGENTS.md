@@ -27,10 +27,10 @@ Accuracy and realism take priority in design decisions. Features with significan
 ### OSL Shader (`src/lens_camera.osl.template`)
 
 - `// {{LENS_DATA}}` and `// {{SCENE_LIGHTS}}` placeholders are replaced per camera with generated code (on lens selection, file load, and light changes)
-- Static defines (`MAX_SURFACES`, `N_EXTRA`, `MAX_EXTRA`, `SURFACE_*` types) live in the template
+- Static `SURFACE_*` type defines live in the template; `MAX_SURFACES` / `N_EXTRA` / `MAX_EXTRA` are emitted by `codegen.py` from `lenses.MAX_SURFACES` (single source; OSL array sizes must be integer literals)
 - Backward ray tracing (sensor → scene) through a multi-surface lens system, using ABCD matrix optics for focus computation and exit pupil aiming
 - Surfaces are listed front-to-back but traced rear-to-front (sensor side first)
-- `MAX_SURFACES` is 36 — any new lens must fit within this limit
+- `MAX_SURFACES` is 36 (defined in `src/lenses.py`) — any new lens must fit within this limit
 
 ### Extension package (`src/`)
 

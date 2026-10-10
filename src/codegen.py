@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .lenses import load_lenses
+from .lenses import MAX_SURFACES, load_lenses
 from .scene_lights import generate_load_scene_lights
 
 N_EXTRA = 8
@@ -78,6 +78,12 @@ def _generate_load_lens_data(lens: dict) -> str:
     close_dist = focus["close_distance"] if focus else 0.0
 
     lines = [
+        # 配列サイズは lenses.MAX_SURFACES を唯一の情報源とする
+        # OSL の配列サイズは整数リテラル必須のため MAX_EXTRA は計算済みの値を出力する
+        f"#define MAX_SURFACES {MAX_SURFACES}",
+        f"#define N_EXTRA {N_EXTRA}",
+        f"#define MAX_EXTRA {MAX_SURFACES * N_EXTRA}",
+        "",
         f"#define NUM_SURFACES {len(lens['surfaces'])}",
         f"#define COATING {coating_val}",
         f"#define SQUEEZE {float(lens['squeeze'])}",
