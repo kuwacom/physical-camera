@@ -229,10 +229,11 @@ int check_aperture_at_plane(
     return 1;
 }
 
-// Snell's law at a flat surface with Fresnel transmittance.
+// Snell's law with Fresnel transmittance.
 // Returns 1 on success, 0 on TIR.
-int refract_at_flat_plane(
-    vector d_in, float n1, float n2, float lambda_nm, float coating,
+// 平面 (N = -Z) と曲面 (交点の法線) で同じ手順なので法線を受け取る。N の向きは入射側に揃え直す
+int refract_with_fresnel(
+    vector d_in, vector N_in, float n1, float n2, float lambda_nm, float coating,
     output vector d_out, output float transmission)
 {
     if (n1 == n2) {
@@ -241,7 +242,7 @@ int refract_at_flat_plane(
         return 1;
     }
 
-    vector N = vector(0, 0, -1);
+    vector N = N_in;
     vector I = normalize(d_in);
     if (dot(I, N) > 0.0)
         N = -N;
@@ -959,24 +960,8 @@ int refract_at_surface(
         return 1;
     }
 
-    if (n1 == n2) {
-        new_dir = ray_dir;
-        transmission = 1.0;
-        return 1;
-    }
-
-    vector I = normalize(ray_dir);
-    if (dot(I, N) > 0.0)
-        N = -N;
-
-    float cos_i = abs(dot(I, N));
-    vector refracted = refract(I, N, n1 / n2);
-    if (dot(refracted, refracted) < 1e-10)
+    if (!refract_with_fresnel(ray_dir, N, n1, n2, lambda_nm, coating, new_dir, transmission))
         return -2;
-
-    float cos_t = abs(dot(refracted, N));
-    transmission = fresnel_transmittance(n1, n2, cos_i, cos_t, lambda_nm, coating);
-    new_dir = refracted;
     return 1;
 }
 
@@ -1061,7 +1046,7 @@ int pass_flat_surface(
         float fn1 = iors[flat_idx];
         float fn2 = (flat_idx > 0) ? iors[flat_idx - 1] : 1.0;
         vector flat_d; float flat_trans;
-        if (!refract_at_flat_plane(d, fn1, fn2, lambda_nm, coating, flat_d, flat_trans)) {
+        if (!refract_with_fresnel(d, vector(0, 0, -1), fn1, fn2, lambda_nm, coating, flat_d, flat_trans)) {
             failure_type = 3;
             return 0;
         }

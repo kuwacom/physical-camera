@@ -87,7 +87,7 @@ thickness_close = 0.89   # thickness at close_distance (infinity value lives in 
    - Ghost and direct rays share `cos4_falloff()` and `write_camera_ray()` (lens space mm → Blender camera space m, spectral weight)
 8. `find_surface_intersection()` — geometry-only hit test returning intersection point + normal for any surface type (1=hit, 0=miss, -1=clipped); spheres and cylinders share `intersect_curved()`, which zeroes the flat axis via `curved_axis_mask()` (also used for the normal); called by `refract_at_surface()` / `reflect_at_surface()`, which apply Snell's law + Fresnel (stops pass through without refraction; reflect is for ghost bounces, never on stops)
 9. `trace_surface_range()` / `trace_ghost_path()` — traces a contiguous surface range (step=±1); a ghost path is three ranges: rear→a (reflect), a+1→b (reflect), b-1→front (refract)
-10. `check_aperture_at_plane()` / `refract_at_flat_plane()` — circular/n-gon aperture clip at a z-plane; Snell's law at a flat surface. The circle / n-gon rule (n-gon only on the stop with ≥ 3 blades) lives in `inside_aperture()`, shared with `find_surface_intersection()`
+10. `check_aperture_at_plane()` / `refract_with_fresnel()` — circular/n-gon aperture clip at a z-plane; Snell's law + Fresnel for a given normal, shared by flat planes (`pass_flat_surface()`, N = -Z) and `refract_at_surface()`. The circle / n-gon rule (n-gon only on the stop with ≥ 3 blades) lives in `inside_aperture()`, shared with `find_surface_intersection()`
 
 Throughput weighting applies cos^4 radiometric falloff and normalizes Fresnel loss against on-axis transmission. When chromatic aberration is enabled, wavelength is sampled uniformly over 400–700nm with golden-ratio decorrelation for the aperture radius sample.
 
