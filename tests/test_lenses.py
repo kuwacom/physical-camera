@@ -143,20 +143,9 @@ def test_paraxial_back_focal_distance_of_simple_lens(tmp_path):
     assert lenses.paraxial_back_focal_distance(lens["surfaces"], lens["surface_types"]) == pytest.approx(expected)
 
 
-# データの絞り径が表記の開放 f 値まで開かないため、UI 下限が近軸の実効値に引き上げられるレンズ
-_UNREACHABLE_MAX_FSTOP = {
-    "navarro_anamorphic_2x": "絞り径 28.289mm では近軸実効 f/3.94 までしか開かず、特許の根拠なしに絞り径を書き換えられない",
-}
-
-
 def _lens_params():
-    params = []
-    for path in sorted(LENS_DIR.glob("*.toml")):
-        marks = []
-        if path.stem in _UNREACHABLE_MAX_FSTOP:
-            marks.append(pytest.mark.xfail(reason=_UNREACHABLE_MAX_FSTOP[path.stem], strict=True))
-        params.append(pytest.param(path.stem, marks=marks, id=path.stem))
-    return params
+    # 将来的にレンズ固有の marks を足しやすくするため glob から明示的に組み立てる
+    return [pytest.param(p.stem, id=p.stem) for p in sorted(LENS_DIR.glob("*.toml"))]
 
 
 @pytest.mark.parametrize("stem", _lens_params())

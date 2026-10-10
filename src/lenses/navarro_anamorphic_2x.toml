@@ -2,7 +2,8 @@
 name = "Navarro Anamorphic 2x Cinema"
 patent = "US Patent 9,063,321 B2 (Navarro, 2015)"
 focal_length = 129.0
-max_fstop = 3.0
+# 特許 US9,063,321 B2 に f 値の記載はなく、表記は近軸開放 (Y 軸) f/3.94 に合わせた丸め
+max_fstop = 4.0
 coating = "multi"
 squeeze = 2.0
 
