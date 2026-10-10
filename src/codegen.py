@@ -107,8 +107,9 @@ def load_osl_template(template_path: Path, lens_dir: Path) -> tuple[str, list[di
     {{LENS_DATA}} and {{SCENE_LIGHTS}} placeholders intact.
     """
     lenses = load_lenses(lens_dir)
+    # 全レンズが不正だと EnumProperty の選択肢が空になり UI が壊れるため、登録自体を明示的に失敗させる
     if not lenses:
-        raise ValueError(f"No .toml lens files found in {lens_dir}")
+        raise ValueError(f"No valid .toml lens files found in {lens_dir}")
 
     template = template_path.read_text()
     return template, lenses

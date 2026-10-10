@@ -5,6 +5,19 @@ from pathlib import Path
 
 MAX_SURFACES = 36
 VALID_SURFACE_TYPES = ("spherical", "flat", "stop", "aspheric", "cylindrical_x", "cylindrical_y")
+VALID_COATINGS = ("none", "single", "multi")
+
+
+def _number(table: dict, key: str, where: str, minimum: float | None = None, strict: bool = False) -> float:
+    """Return table[key] as a number, raising ValueError when missing, non-numeric or out of range."""
+    value = table.get(key)
+    # bool は int のサブクラスなので明示的に弾かないと true が 1 として通ってしまう
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{where}: {key} must be a number, got {value!r}")
+    if minimum is not None and (value <= minimum if strict else value < minimum):
+        relation = ">" if strict else ">="
+        raise ValueError(f"{where}: {key} {value!r} must be {relation} {minimum}")
+    return value
 
 
 def _resolve_surface_types(surfaces: list[dict], filename: str) -> list[str]:
@@ -29,17 +42,19 @@ def _parse_focus(data: dict, surfaces: list[dict], filename: str) -> dict | None
     if focus_raw is None:
         return None
 
-    close_distance = focus_raw["close_distance"]
-    if not isinstance(close_distance, (int, float)) or close_distance <= 0:
-        raise ValueError(f"{filename}: focus.close_distance {close_distance!r} must be a positive number")
+    if not isinstance(focus_raw, dict):
+        raise ValueError(f"{filename}: [focus] must be a table")
+    close_distance = _number(focus_raw, "close_distance", f"{filename}: focus", minimum=0, strict=True)
     variables_raw = focus_raw.get("variable", [])
-    if not variables_raw:
+    if not isinstance(variables_raw, list) or not variables_raw:
         raise ValueError(f"{filename}: [focus] section has no [[focus.variable]] entries")
 
     variables = []
     seen_surfaces = set()
     for v in variables_raw:
-        idx = v["surface"]
+        idx = v.get("surface") if isinstance(v, dict) else None
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            raise ValueError(f"{filename}: focus.variable surface must be an integer index, got {idx!r}")
         if idx in seen_surfaces:
             raise ValueError(f"{filename}: focus.variable surface {idx} listed more than once")
         if idx < 0 or idx >= len(surfaces):
@@ -48,9 +63,7 @@ def _parse_focus(data: dict, surfaces: list[dict], filename: str) -> dict | None
             raise ValueError(
                 f"{filename}: focus.variable surface {idx} has ior {surfaces[idx]['ior']} (expected 1.0 for air gap)"
             )
-        thickness_close = v["thickness_close"]
-        if thickness_close < 0:
-            raise ValueError(f"{filename}: focus.variable surface {idx} has negative thickness_close {thickness_close}")
+        thickness_close = _number(v, "thickness_close", f"{filename}: focus.variable surface {idx}", minimum=0)
         seen_surfaces.add(idx)
         variables.append({"surface": idx, "thickness_close": thickness_close})
 
@@ -86,63 +99,107 @@ def paraxial_fstop(surfaces: list[dict], surface_types: list[str]) -> float:
     return efl / entrance_pupil
 
 
+def _validate_surfaces(surfaces: list[dict], surface_types: list[str], filename: str) -> None:
+    for i, (s, st) in enumerate(zip(surfaces, surface_types, strict=True)):
+        where = f"{filename}: surface {i}"
+        _number(s, "radius", where)
+        _number(s, "thickness", where, minimum=0)
+        _number(s, "ior", where, minimum=1.0)
+        _number(s, "aperture", where, minimum=0, strict=True)
+        _number(s, "abbe_v", where, minimum=0)
+        if st == "stop":
+            if s["radius"] != 0 or s["ior"] != 1.0:
+                raise ValueError(f"{where}: stop must have radius = 0 and ior = 1.0")
+        elif st == "aspheric":
+            if s["radius"] == 0:
+                raise ValueError(f"{filename}: aspheric surface {i} must have nonzero radius")
+            coeffs = s.get("aspheric_coeffs")
+            if (
+                not isinstance(coeffs, list)
+                or len(coeffs) not in (3, 4)
+                or any(isinstance(c, bool) or not isinstance(c, (int, float)) for c in coeffs)
+            ):
+                raise ValueError(
+                    f"{filename}: aspheric surface {i} must have aspheric_coeffs as a list of 3 or 4 floats"
+                )
+            if "conic" in s:
+                _number(s, "conic", where)
+        elif st in ("cylindrical_x", "cylindrical_y"):
+            if s["radius"] == 0:
+                raise ValueError(f"{filename}: cylindrical surface {i} must have nonzero radius")
+            if "aspheric_coeffs" in s or "conic" in s:
+                raise ValueError(f"{filename}: cylindrical surface {i} must not have aspheric_coeffs or conic")
+        else:
+            if st == "spherical" and s["radius"] == 0:
+                raise ValueError(f"{filename}: spherical surface {i} must have nonzero radius")
+            if "aspheric_coeffs" in s or "conic" in s:
+                raise ValueError(f"{filename}: non-aspheric surface {i} must not have aspheric_coeffs or conic")
+
+
+def load_lens(toml_path: Path) -> dict:
+    """Read and validate one lens file. Raises ValueError (or a TOML decode error) when invalid."""
+    filename = toml_path.name
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    lens = data.get("lens")
+    if not isinstance(lens, dict):
+        raise ValueError(f"{filename}: missing [lens] table")
+    name = lens.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"{filename}: lens.name must be a non-empty string")
+    focal_length = _number(lens, "focal_length", f"{filename}: lens", minimum=0, strict=True)
+    max_fstop = _number(lens, "max_fstop", f"{filename}: lens", minimum=0, strict=True)
+    surfaces = data.get("surface")
+    if not isinstance(surfaces, list) or not surfaces or not all(isinstance(s, dict) for s in surfaces):
+        raise ValueError(f"{filename}: missing [[surface]] entries")
+    if len(surfaces) > MAX_SURFACES:
+        raise ValueError(f"{filename}: {len(surfaces)} surfaces exceeds MAX_SURFACES ({MAX_SURFACES})")
+    coating = lens.get("coating", "none")
+    if coating not in VALID_COATINGS:
+        raise ValueError(f"{filename}: coating {coating!r} must be one of {VALID_COATINGS}")
+    squeeze = lens.get("squeeze", 1.0)
+    if isinstance(squeeze, bool) or not isinstance(squeeze, (int, float)) or squeeze <= 0:
+        raise ValueError(f"{filename}: squeeze {squeeze!r} must be a positive number")
+    # 型推論で radius を参照するため、面ごとの数値検証より先に radius の有無だけ確認する
+    for i, s in enumerate(surfaces):
+        _number(s, "radius", f"{filename}: surface {i}")
+    surface_types = _resolve_surface_types(surfaces, filename)
+    _validate_surfaces(surfaces, surface_types, filename)
+    stop_count = surface_types.count("stop")
+    if stop_count != 1:
+        raise ValueError(f"{filename}: expected exactly 1 stop surface, found {stop_count}")
+    stop_index = surface_types.index("stop")
+    focus = _parse_focus(data, surfaces, filename)
+    try:
+        open_fstop = paraxial_fstop(surfaces, surface_types)
+    except ValueError as e:
+        raise ValueError(f"{filename}: {e}") from e
+    return {
+        "name": name,
+        "filename_stem": toml_path.stem,
+        "focal_length": focal_length,
+        "max_fstop": max_fstop,
+        "open_fstop": open_fstop,
+        "stop_index": stop_index,
+        "coating": coating,
+        "squeeze": squeeze,
+        "surfaces": surfaces,
+        "surface_types": surface_types,
+        "focus": focus,
+    }
+
+
 def load_lenses(lens_dir: Path) -> list[dict]:
-    """Read all .toml lens files from lens_dir, sorted by filename."""
+    """Read all .toml lens files from lens_dir, sorted by filename.
+
+    Invalid files are skipped with a message so one broken lens does not
+    prevent the others from loading.
+    """
     lenses = []
     for toml_path in sorted(lens_dir.glob("*.toml")):
-        with open(toml_path, "rb") as f:
-            data = tomllib.load(f)
-        lens = data["lens"]
-        surfaces = data["surface"]
-        if len(surfaces) > MAX_SURFACES:
-            raise ValueError(f"{toml_path.name}: {len(surfaces)} surfaces exceeds MAX_SURFACES ({MAX_SURFACES})")
-        coating = lens.get("coating", "none")
-        valid_coatings = ("none", "single", "multi")
-        if coating not in valid_coatings:
-            raise ValueError(f"{toml_path.name}: coating {coating!r} must be one of {valid_coatings}")
-        squeeze = lens.get("squeeze", 1.0)
-        if not isinstance(squeeze, (int, float)) or squeeze <= 0:
-            raise ValueError(f"{toml_path.name}: squeeze {squeeze!r} must be a positive number")
-        surface_types = _resolve_surface_types(surfaces, toml_path.name)
-        for i, (s, st) in enumerate(zip(surfaces, surface_types)):
-            if st == "aspheric":
-                if s["radius"] == 0:
-                    raise ValueError(f"{toml_path.name}: aspheric surface {i} must have nonzero radius")
-                coeffs = s.get("aspheric_coeffs")
-                if not isinstance(coeffs, list) or len(coeffs) not in (3, 4):
-                    raise ValueError(
-                        f"{toml_path.name}: aspheric surface {i} must have aspheric_coeffs as a list of 3 or 4 floats"
-                    )
-            elif st in ("cylindrical_x", "cylindrical_y"):
-                if s["radius"] == 0:
-                    raise ValueError(f"{toml_path.name}: cylindrical surface {i} must have nonzero radius")
-                if "aspheric_coeffs" in s or "conic" in s:
-                    raise ValueError(
-                        f"{toml_path.name}: cylindrical surface {i} must not have aspheric_coeffs or conic"
-                    )
-            else:
-                if "aspheric_coeffs" in s or "conic" in s:
-                    raise ValueError(
-                        f"{toml_path.name}: non-aspheric surface {i} must not have aspheric_coeffs or conic"
-                    )
-        stop_count = surface_types.count("stop")
-        if stop_count != 1:
-            raise ValueError(f"{toml_path.name}: expected exactly 1 stop surface, found {stop_count}")
-        stop_index = surface_types.index("stop")
-        focus = _parse_focus(data, surfaces, toml_path.name)
-        lenses.append(
-            {
-                "name": lens["name"],
-                "filename_stem": toml_path.stem,
-                "focal_length": lens["focal_length"],
-                "max_fstop": lens["max_fstop"],
-                "open_fstop": paraxial_fstop(surfaces, surface_types),
-                "stop_index": stop_index,
-                "coating": coating,
-                "squeeze": squeeze,
-                "surfaces": surfaces,
-                "surface_types": surface_types,
-                "focus": focus,
-            }
-        )
+        try:
+            lenses.append(load_lens(toml_path))
+        # 検証で拾いきれない想定外の構造 (KeyError/TypeError) でもアドオン全体を落とさないため広めに捕捉する
+        except (OSError, tomllib.TOMLDecodeError, ValueError, KeyError, TypeError) as e:
+            print(f"Physical Camera: skipped lens {toml_path.name}: {e}")
     return lenses
