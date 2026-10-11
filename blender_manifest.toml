@@ -30,6 +30,7 @@ paths_exclude_pattern = [
   "/uv.lock",
   "/AGENTS.md",
   ".gitignore",
+  ".gitattributes",
   "*.zip",
   "*.oso",
 ]
