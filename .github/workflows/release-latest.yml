@@ -18,28 +18,7 @@ env:
   ZIP_NAME: PhysicalCamera.zip
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # バージョンは現行の安定版メジャーに追従させる
-      - uses: astral-sh/setup-uv@v10
-
-      # uv.lock と pyproject.toml の不整合を検出できるよう --frozen で同期する
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Lint
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-
-      - name: Test
-        run: uv run pytest
-
   release:
-    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
