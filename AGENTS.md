@@ -13,7 +13,7 @@ blender --command extension validate
 
 ## Overview
 
-Physical Camera — a Blender extension that replaces Blender's built-in camera with a physically-based lens simulation using OSL. Rays are traced backwards through real lens prescriptions (spherical surfaces, aperture stops, Fresnel transmission, chromatic dispersion) to produce realistic depth of field, bokeh, and aberrations. Requires Blender 4.5+ with Cycles and OSL enabled.
+Physical Camera — a Blender extension that replaces Blender's built-in camera with a physically-based lens simulation using OSL. Rays are traced backwards through real lens prescriptions (spherical surfaces, aperture stops, Fresnel transmission, chromatic dispersion) to produce realistic depth of field, bokeh, and aberrations. Requires Blender 4.5+ with Cycles (CPU or OptiX); Cycles' "Open Shading Language" option can stay off (see Compile time).
 
 Accuracy and realism take priority in design decisions. Features with significant per-ray cost should be toggleable so users can pick the accuracy/speed tradeoff — consider approximations or importance sampling before implementing an expensive feature. Features that don't fit the existing architecture should prompt a refactor before implementation, not after.
 

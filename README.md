@@ -23,8 +23,10 @@ Blender のカメラを、物理ベースのレンズシミュレーションに
 ## 必要環境
 
 - Blender 4.5 以降
-- OSL を有効にした Cycles
+- Cycles
 - CPU または OptiX レンダリング(OSL カメラは CUDA / HIP / Metal では使えません)
+
+Cycles の **Open Shading Language** の項目は有効にしなくても動きます(4.5 / 5.2 の OptiX で確認)。有効にすると初回のみ Cycles 本体のコンパイルに数分かかるため、カメラ以外で OSL を使う場合だけ有効にしてください
 
 ## インストール
 
