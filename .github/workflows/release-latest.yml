@@ -54,7 +54,7 @@ jobs:
         run: |
           # エクステンションの zip は、フォルダで包まずに blender_manifest.toml を直下に置く
           mkdir -p dist/files
-          cp -r blender_manifest.toml __init__.py src LICENSE README.md README.en.md dist/files/
+          cp -r blender_manifest.toml __init__.py src LICENSE README.md README.en.md CHANGELOG.md dist/files/
           find dist -name "__pycache__" -type d -prune -exec rm -rf {} +
           (cd dist/files && zip -r -q "../$ZIP_NAME" .)
           unzip -l "dist/$ZIP_NAME"

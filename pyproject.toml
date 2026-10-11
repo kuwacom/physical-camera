@@ -1,6 +1,6 @@
 [project]
 name = "physical-camera"
-version = "1.0.0"
+version = "1.12.0"
 description = "Blender の OSL カメラで実写的なレンズシミュレーションを行うアドオン"
 readme = "README.md"
 license = "GPL-3.0-or-later"

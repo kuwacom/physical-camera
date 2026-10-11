@@ -31,7 +31,7 @@ wheels = [
 
 [[package]]
 name = "physical-camera"
-version = "1.0.0"
+version = "1.12.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
