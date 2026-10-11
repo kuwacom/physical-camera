@@ -11,7 +11,8 @@ from bpy.props import (
     IntProperty,
 )
 
-from . import codegen, diagram, scene_lights
+from . import codegen, diagram, scene_lights, translations
+from .i18n import iface_
 from .lenses import aperture_scale, min_fstop
 
 _TEXT_BLOCK_PREFIX = "Physical Lens - "
@@ -333,7 +334,8 @@ def _cycles_device_warning(scene):
             return None
     if not compute_type or compute_type == "OPTIX":
         return None
-    return f"OSL camera shaders need CPU or OptiX (GPU compute device is {compute_type})"
+    # 値を埋め込む文字列は Blender が訳さないため iface_ で訳す。表示時の二重翻訳を translate=False で防ぐ
+    return iface_("OSL camera shaders need CPU or OptiX (GPU compute device is {})").format(compute_type)
 
 
 def _stored_light_count(cam):
@@ -352,12 +354,16 @@ def _draw_environment_warnings(layout, context, cam, props):
 
     device_warning = _cycles_device_warning(scene) if scene is not None else None
     if device_warning is not None:
-        layout.label(text=device_warning, icon="ERROR")
+        layout.label(text=device_warning, icon="ERROR", translate=False)
 
     error = _compile_errors.get(cam.name)
     if error is not None:
         # OSL のエラーメッセージは複数行になり得るため 1 行目だけ表示する
-        layout.label(text=f"Shader compile error: {error.splitlines()[0]}", icon="ERROR")
+        layout.label(
+            text=iface_("Shader compile error: {}").format(error.splitlines()[0]),
+            icon="ERROR",
+            translate=False,
+        )
 
     if props.lens_ghosts or props.diffraction:
         count = _stored_light_count(cam)
@@ -368,7 +374,9 @@ def _draw_environment_warnings(layout, context, cam, props):
                 icon="INFO",
             )
         else:
-            layout.label(text=f"Scene lights passed to the shader: {count}", icon="LIGHT")
+            layout.label(
+                text=iface_("Scene lights passed to the shader: {}").format(count), icon="LIGHT", translate=False
+            )
 
 
 class CAMERA_PT_physical_lens(bpy.types.Panel):
@@ -407,7 +415,7 @@ class CAMERA_PT_physical_lens(bpy.types.Panel):
         lens = _get_lens(props)
 
         if lens is not None:
-            column.prop(props, "fstop", text=f"f-stop (min f/{min_fstop(lens):.1f})")
+            column.prop(props, "fstop", text=iface_("f-stop (min f/{})").format(f"{min_fstop(lens):.1f}"))
         else:
             column.prop(props, "fstop")
 
@@ -669,6 +677,7 @@ def register():
     bpy.app.handlers.render_pre.append(_on_render_pre)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update)
     bpy.app.handlers.frame_change_post.append(_on_frame_change)
+    translations.register()
 
 
 def unregister():
@@ -683,3 +692,5 @@ def unregister():
 
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
+
+    translations.unregister()

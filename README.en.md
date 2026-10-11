@@ -27,6 +27,8 @@ This project is a fork of [sidp/physical-camera](https://github.com/sidp/physica
 
 Cycles' **Open Shading Language** option does not need to be enabled; the camera works on both CPU and OptiX without it. Enabling it makes the first render compile Cycles' own OSL kernel, which takes several minutes, so turn it on only if you use OSL outside the camera.
 
+The UI also displays in Japanese, following Blender's language setting.
+
 ## Installation
 
 ### Option 1: Install the zip from Preferences

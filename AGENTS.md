@@ -21,6 +21,7 @@ Accuracy and realism take priority in design decisions. Features with significan
 
 - Root `__init__.py` — entry point that only delegates to `src/`; `blender_manifest.toml` sits at the repo root, so the installable zip is built from the root
 - `src/` — the extension package itself; `scripts/build_diagrams.py` (dev-only, excluded from the zip) regenerates the lens diagram PNGs in `src/previews/`
+- `src/translations/` — UI translations registered with `bpy.app.translations`; when adding or changing UI strings, update `src/translations/ja_jp.py` too
 - `.github/workflows/release-latest.yml` — publishes a `latest` release zip on every push to `main`; bumping the manifest `version` also creates a `vX.Y.Z` release
 
 ## Architecture
