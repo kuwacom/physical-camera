@@ -26,7 +26,7 @@ Blender のカメラを、物理ベースのレンズシミュレーションに
 - Cycles
 - CPU または OptiX レンダリング(OSL カメラは CUDA / HIP / Metal では使えません)
 
-Cycles の **Open Shading Language** の項目は有効にしなくても動きます(4.5 / 5.2 の OptiX で確認)。有効にすると初回のみ Cycles 本体のコンパイルに数分かかるため、カメラ以外で OSL を使う場合だけ有効にしてください
+Cycles の **Open Shading Language** の項目は有効にしなくても CPU / OptiX のどちらでも動きます。有効にすると初回のみ Cycles 本体のコンパイルに数分かかるため、カメラ以外で OSL を使う場合だけ有効にしてください
 
 ## インストール
 

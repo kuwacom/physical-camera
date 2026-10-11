@@ -25,7 +25,7 @@ This project is a fork of [sidp/physical-camera](https://github.com/sidp/physica
 - Cycles render engine
 - CPU or OptiX rendering (OSL cameras are not supported on CUDA, HIP, or Metal)
 
-Cycles' **Open Shading Language** option does not need to be enabled (verified with OptiX in 4.5 and 5.2). Enabling it makes the first render compile Cycles' own OSL kernel, which takes several minutes, so turn it on only if you use OSL outside the camera.
+Cycles' **Open Shading Language** option does not need to be enabled; the camera works on both CPU and OptiX without it. Enabling it makes the first render compile Cycles' own OSL kernel, which takes several minutes, so turn it on only if you use OSL outside the camera.
 
 ## Installation
 
